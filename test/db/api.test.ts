@@ -7,7 +7,7 @@ import pg from 'pg';
 import {startDb, type TestDb} from './pg.ts';
 import {pgStore} from '../../src/store.ts';
 import {bodyHash, mintKey, LIMITS} from '../../src/rules.ts';
-import type {Actor, Store} from '../../src/api.ts';
+import type {Actor, Store, Cursor, PostRow} from '../../src/api.ts';
 
 let db: TestDb, pool: pg.Pool, store: Store, auth: pg.Client;
 before(async () => {
@@ -87,27 +87,31 @@ test('unknown board is refused; accepted posts are audited', async () => {
   await admin.end();
 });
 
-test('read: pages in order without repeats; hidden and banned posts disappear', async () => {
+test('read: newest first with before=, oldest first with after=, no repeats; hidden and banned posts disappear', async () => {
   const owner = await person();
   const actor = await agentKey(owner);
   const ids: string[] = [];
   for (let i = 0; i < 7; i++) ids.push(((await post(actor, 'other-catalan', uniq())) as any).id);
-  const seen: string[] = [];
-  let after = null;
-  for (;;) {
-    const page = (await store.listPosts('other-catalan', after, 3))!;
-    seen.push(...page.map(p => p.id));
-    if (page.length < 3) break;
-    const [at, id] = [page.at(-1)!.cursor.slice(0, page.at(-1)!.cursor.lastIndexOf('_')), page.at(-1)!.id];
-    after = {at, id};
-  }
-  assert.deepEqual(seen, ids);
-  assert.equal((await store.listPosts('nope', null, 5)), null);
+  const cursorOf = (p: PostRow): Cursor => ({at: p.cursor.slice(0, p.cursor.lastIndexOf('_')), id: p.id});
+  const walk = async (dir: 'after' | 'before', start: Cursor | undefined) => {
+    const seen: string[] = [];
+    let cursor = start;
+    for (;;) {
+      const page: PostRow[] = (await store.listPosts('other-catalan', cursor ? {[dir]: cursor} : {}, 3))!;
+      seen.push(...page.map(p => p.id));
+      if (page.length < 3) return seen;
+      cursor = cursorOf(page.at(-1)!);
+    }
+  };
+  assert.deepEqual(await walk('before', undefined), [...ids].reverse());
+  const first = (await store.listPosts('other-catalan', {before: undefined}, 50))!.at(-1)!;
+  assert.deepEqual(await walk('after', cursorOf(first)), ids.slice(1));
+  assert.equal((await store.listPosts('nope', {}, 5)), null);
   const admin = await db.client('board_admin');
   await admin.query(`INSERT INTO board.hidden (post_id, by_actor, reason) VALUES ($1, 'nil', 'spam')`, [ids[0]]);
-  assert.equal((await store.listPosts('other-catalan', null, 50))!.length, 6);
+  assert.equal((await store.listPosts('other-catalan', {}, 50))!.length, 6);
   await admin.query(`INSERT INTO board.ban (author_id, by_actor, reason) VALUES ($1, 'nil', 'spam')`, [owner]);
-  assert.equal((await store.listPosts('other-catalan', null, 50))!.length, 0);
+  assert.equal((await store.listPosts('other-catalan', {}, 50))!.length, 0);
   assert.equal(await store.keyByPrefix(actor.label.slice(4)), null);
   await admin.end();
 });

@@ -29,6 +29,7 @@ CREATE TABLE board.author (
 );
 -- One row per GitHub account; a login change adds no second account.
 CREATE UNIQUE INDEX author_github_id ON board.author (github_id) WHERE kind = 'github';
+CREATE INDEX author_owner ON board.author (owner_id) WHERE owner_id IS NOT NULL;
 
 -- Agent keys: only a SHA-256 of the secret is stored. prefix is the public lookup part.
 CREATE TABLE board.api_key (
@@ -41,6 +42,8 @@ CREATE TABLE board.api_key (
   scopes      text[] NOT NULL DEFAULT '{post}' CHECK (scopes <@ '{post}'),
   created_at  timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE INDEX api_key_owner ON board.api_key (owner_id);
 
 CREATE TABLE board.key_revocation (
   key_id      uuid PRIMARY KEY REFERENCES board.api_key(id),
@@ -84,7 +87,8 @@ CREATE TABLE board.post (
   body_hash   bytea NOT NULL CHECK (length(body_hash) = 32),
   created_at  timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX post_board_time ON board.post (board_slug, created_at);
+-- Feed (both directions) and the per-board cap. See docs/queries.md for each query's plan.
+CREATE INDEX post_board_time ON board.post (board_slug, created_at, id);
 CREATE INDEX post_author_time ON board.post (author_id, created_at);
 CREATE INDEX post_key_time ON board.post (key_id, created_at);
 CREATE INDEX post_hash_time ON board.post (body_hash, created_at);
@@ -117,7 +121,8 @@ CREATE VIEW board.visible_post AS
   JOIN board.author a ON a.id = p.author_id
   LEFT JOIN board.author o ON o.id = a.owner_id
   WHERE NOT EXISTS (SELECT 1 FROM board.hidden h WHERE h.post_id = p.id)
-    AND NOT EXISTS (SELECT 1 FROM board.ban b WHERE b.author_id = p.author_id OR b.author_id = a.owner_id);
+    AND NOT EXISTS (SELECT 1 FROM board.ban b WHERE b.author_id = p.author_id)
+    AND NOT EXISTS (SELECT 1 FROM board.ban b WHERE b.author_id = a.owner_id);
 
 -- Usable keys: not revoked, agent and owner not banned.
 CREATE VIEW board.active_key AS

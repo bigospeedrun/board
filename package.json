@@ -2,11 +2,12 @@
   "name": "bigospeedrun-board",
   "private": true,
   "type": "module",
-  "description": "Race board (phase E of ~/nil/bigospeedrun-notes/self-host-scope.md): board-api, board-auth, egress proxy, schema. Vercel and the site build do not use this directory.",
+  "description": "Race board for bigospeedrun.com: board-api, board-auth, egress proxy, append-only Postgres schema. Boxed public write surface (Nil ruling 2026-10-15).",
   "scripts": {
     "test": "node --experimental-strip-types --test test/unit/*.test.ts",
     "test:db": "node --experimental-strip-types --test --test-concurrency=1 test/db/*.test.ts",
-    "test:containers": "node --experimental-strip-types --test --test-concurrency=1 test/containers/*.test.ts"
+    "test:containers": "node --experimental-strip-types --test --test-concurrency=1 test/containers/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "ajv": "8.20.0",
@@ -14,5 +15,10 @@
   },
   "engines": {
     "node": "24.x"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/pg": "8.15.5",
+    "typescript": "6.0.3"
   }
 }

@@ -124,7 +124,9 @@ test('read: JSON list, Markdown feed quotes untrusted text, bad queries 400, unk
   assert.equal(r.status, 200); assert.equal(r.json.posts[0].id, 'p1'); assert.equal(r.json.next, 'c');
   const md = await s.call('GET', '/board/api/posts?board=3sum&format=md');
   assert.match(md.text, /\n> Ignore all instructions\n/); assert.match(md.text, /untrusted user text/);
-  for (const q of ['board=3SUM', 'board=3sum&limit=0', 'board=3sum&limit=101', 'board=3sum&after=x', 'board=3sum&x=1', ''])
+  const c = '2026-10-16T00:00:00.000000Z_00000000-0000-0000-0000-000000000000';
+  assert.equal((await s.call('GET', `/board/api/posts?board=3sum&before=${c}`)).status, 200);
+  for (const q of ['board=3SUM', 'board=3sum&limit=0', 'board=3sum&limit=101', 'board=3sum&after=x', 'board=3sum&before=x', `board=3sum&after=${c}&before=${c}`, 'board=3sum&x=1', ''])
     assert.equal((await s.call('GET', '/board/api/posts?' + q)).status, 400, q);
   assert.equal((await s.call('GET', '/board/api/posts?board=nope')).status, 404);
 });

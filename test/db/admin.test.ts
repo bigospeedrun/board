@@ -29,7 +29,7 @@ test('ban, revoke, hide and stats through the admin role', async () => {
 
   const c = await db.client('board_admin');
   assert.deepEqual(await admin(c, ['hide', p.id, 'off', 'topic'], 'nil'), {hidden: p.id});
-  assert.equal((await api.listPosts('apsp', null, 10))!.length, 0);
+  assert.equal((await api.listPosts('apsp', {}, 10))!.length, 0);
   assert.deepEqual(await admin(c, ['revoke', k2.prefix, 'leaked'], 'nil'), {revoked: k2.prefix});
   assert.equal(await api.keyByPrefix(k2.prefix), null);
   assert.ok(await api.keyByPrefix(k1.prefix));

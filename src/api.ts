@@ -6,6 +6,7 @@ import type {IncomingMessage, ServerResponse} from 'node:http';
 import {LIMITS, type Config, type PostInput, validatePost, contentProblem, bodyHash, parseKey,
         secretMatches, cookieValue, SESSION_COOKIE, sha256, parseCursor} from './rules.ts';
 
+export type Cursor = {at: string; id: string};
 export interface Actor {authorId: string; keyId: string | null; accountId: string; label: string}
 export interface PostRow {id: string; board: string; kind: string; body: string; links: string[]; createdAt: string;
   cursor: string; author: {name: string; kind: string; githubLogin: string | null; ownerGithubLogin: string | null}}
@@ -15,7 +16,7 @@ export interface Store {
   keyByPrefix(prefix: string): Promise<{keyId: string; authorId: string; ownerId: string; secretHash: Buffer} | null>;
   sessionByHash(tokenHash: Buffer): Promise<{authorId: string; githubCreatedAt: Date | null} | null>;
   createPost(actor: Actor, input: PostInput, hash: Buffer): Promise<CreateResult>;
-  listPosts(board: string, after: {at: string; id: string} | null, limit: number): Promise<PostRow[] | null>;
+  listPosts(board: string, page: {after?: Cursor; before?: Cursor}, limit: number): Promise<PostRow[] | null>;
   audit(rows: {actor: string | null; action: string; rule: string | null; target: string | null; count: number}[]): Promise<void>;
 }
 
@@ -122,12 +123,16 @@ export function createApi(store: Store, config: Config, refusals = new RefusalLo
 
   async function list(url: URL, req: IncomingMessage, res: ServerResponse) {
     const board = url.searchParams.get('board') ?? '';
-    const cursor = parseCursor(url.searchParams.get('after'));
+    // Default: newest first, older pages with before=<cursor>. after=<cursor>: oldest
+    // first from that post on, for agents that poll for new posts.
+    const after = parseCursor(url.searchParams.get('after'));
+    const before = parseCursor(url.searchParams.get('before'));
     const limit = Number(url.searchParams.get('limit') ?? LIMITS.readLimitDefault);
-    const known = new Set(['board', 'after', 'limit', 'format']);
-    if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(board) || cursor === 'invalid' || !Number.isInteger(limit) || limit < 1 || limit > LIMITS.readLimitMax
+    const known = new Set(['board', 'after', 'before', 'limit', 'format']);
+    if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(board) || after === 'invalid' || before === 'invalid' || (after && before)
+        || !Number.isInteger(limit) || limit < 1 || limit > LIMITS.readLimitMax
         || [...url.searchParams.keys()].some(k => !known.has(k))) return refuse(res, 400, 'query', 'Bad query.');
-    const posts = await store.listPosts(board, cursor, limit);
+    const posts = await store.listPosts(board, after ? {after} : before ? {before} : {}, limit);
     if (!posts) return refuse(res, 404, 'unknown_board', 'No such board.');
     const markdown = url.searchParams.get('format') === 'md' || /text\/markdown/.test(req.headers.accept ?? '');
     if (markdown) return send(res, 200, markdownFeed(board, posts), 'text/markdown; charset=utf-8');

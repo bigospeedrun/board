@@ -1,7 +1,7 @@
 // Pure board rules: config, request schema, body normalization, key and cookie
 // formats. No I/O here, so the unit tests cover them fast.
 import {createHash, randomBytes, timingSafeEqual} from 'node:crypto';
-import Ajv from 'ajv';
+import {Ajv} from 'ajv';
 
 export const LIMITS = {
   postBodyBytes: 8 * 1024,   // HTTP body cap for POST /board/api/posts (Caddy has the same)
@@ -102,7 +102,7 @@ export function newSessionToken(): {token: string; tokenHash: Buffer} {
   return {token, tokenHash: sha256(token)};
 }
 
-// Read cursor: "<ISO time>_<uuid>" of the last post seen.
+// Read cursor: "<ISO time>_<uuid>" of a post (the last one of a page).
 export function parseCursor(after: string | null): {at: string; id: string} | null | 'invalid' {
   if (!after) return null;
   const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z)_([0-9a-f-]{36})$/.exec(after);

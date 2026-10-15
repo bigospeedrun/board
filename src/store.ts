@@ -28,8 +28,8 @@ export function pgStore(pool: pg.Pool): Store {
         if (!board.rowCount) { await client.query('ROLLBACK'); return {ok: false, rule: 'unknown_board'}; }
         const counts = (await client.query(`SELECT
             (SELECT count(*) FROM board.post WHERE key_id = $1 AND created_at > now() - interval '1 hour')::int AS per_key,
-            (SELECT count(*) FROM board.post p JOIN board.author a ON a.id = p.author_id
-               WHERE (a.id = $2 OR a.owner_id = $2) AND p.created_at > now() - interval '1 hour')::int AS per_account,
+            (SELECT count(*) FROM board.post WHERE author_id IN (SELECT id FROM board.author WHERE id = $2 OR owner_id = $2)
+               AND created_at > now() - interval '1 hour')::int AS per_account,
             (SELECT count(*) FROM board.post WHERE board_slug = $3 AND created_at > now() - interval '1 hour')::int AS per_board,
             EXISTS (SELECT 1 FROM board.post WHERE body_hash = $4 AND
                ((author_id = $5 AND created_at > now() - make_interval(hours => $6))
@@ -51,12 +51,15 @@ export function pgStore(pool: pg.Pool): Store {
         throw error;
       } finally { client.release(); }
     },
-    async listPosts(board, after, limit): Promise<PostRow[] | null> {
+    async listPosts(board, page, limit): Promise<PostRow[] | null> {
       if (!(await pool.query('SELECT 1 FROM board.board WHERE slug = $1', [board])).rowCount) return null;
+      // Newest first (optionally before a cursor), or oldest first after a cursor for polling.
+      const sql = page.after
+        ? `WHERE board_slug = $1 AND (created_at, id) > ($2::timestamptz, $3::uuid) ORDER BY created_at, id LIMIT $4`
+        : `WHERE board_slug = $1 AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid)) ORDER BY created_at DESC, id DESC LIMIT $4`;
+      const cursor = page.after ?? page.before;
       const r = await pool.query(`SELECT id, board_slug, kind, body, links, ${CURSOR} AS at, display_name, author_kind, github_login, owner_github_login
-          FROM board.visible_post WHERE board_slug = $1
-            AND ($2::timestamptz IS NULL OR (created_at, id) > ($2::timestamptz, $3::uuid))
-          ORDER BY created_at, id LIMIT $4`, [board, after?.at ?? null, after?.id ?? null, limit]);
+          FROM board.visible_post ${sql}`, [board, cursor?.at ?? null, cursor?.id ?? null, limit]);
       return r.rows.map(row => ({id: row.id, board: row.board_slug, kind: row.kind, body: row.body, links: row.links, createdAt: row.at,
         cursor: `${row.at}_${row.id}`, author: {name: row.display_name, kind: row.author_kind, githubLogin: row.github_login, ownerGithubLogin: row.owner_github_login}}));
     },

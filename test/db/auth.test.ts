@@ -37,7 +37,7 @@ test('sign in, session, mint, post, revoke, end session, ban', async () => {
   const actor = {authorId: found.authorId, keyId: found.keyId, accountId: found.ownerId, label: 'key:' + key.prefix};
   const created = await api.createPost(actor, {board: '3sum', kind: 'result', body: 'first', links: []}, bodyHash('first'));
   assert.ok(created.ok);
-  const listed = (await api.listPosts('3sum', null, 10))!;
+  const listed = (await api.listPosts('3sum', {}, 10))!;
   assert.deepEqual(listed.map(p => [p.author.name, p.author.kind, p.author.ownerGithubLogin]), [['my agent', 'agent_key', 'alice']]);
 
   assert.equal(await auth.revokeKey(first.authorId, key.prefix, 'author:' + first.authorId), true);
@@ -56,5 +56,5 @@ test('sign in, session, mint, post, revoke, end session, ban', async () => {
   const fresh = newSessionToken();
   await auth.createSession(first.authorId, fresh.tokenHash, 30);
   assert.equal(await auth.session(fresh.tokenHash), null);
-  assert.equal((await api.listPosts('3sum', null, 10))!.length, 0);
+  assert.equal((await api.listPosts('3sum', {}, 10))!.length, 0);
 });
