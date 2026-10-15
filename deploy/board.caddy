@@ -1,0 +1,50 @@
+# Race board routes for the bigospeedrun.com site block (phase E; not deployed).
+# Import inside the site block: `import /etc/caddy/sites/board.caddy`.
+# Only the three public endpoints pass; everything else under /board/ is 404.
+# Caddy reaches the services through unix sockets in /run/board (group boardsock).
+handle /board/* {
+	@post_api {
+		method POST
+		path /board/api/posts
+		header Content-Type application/json*
+	}
+	handle @post_api {
+		request_body {
+			max_size 8KB
+		}
+		reverse_proxy unix//run/board/api.sock {
+			header_up X-Forwarded-For {client_ip}
+		}
+	}
+
+	@read_api {
+		method GET HEAD
+		path /board/api/posts
+	}
+	handle @read_api {
+		reverse_proxy unix//run/board/api.sock
+	}
+
+	@auth_get {
+		method GET
+		path /board/auth/login /board/auth/callback /board/auth/account /board/auth/
+	}
+	handle @auth_get {
+		reverse_proxy unix//run/board/auth.sock
+	}
+
+	@auth_post {
+		method POST
+		path /board/auth/keys /board/auth/keys/revoke /board/auth/logout
+	}
+	handle @auth_post {
+		request_body {
+			max_size 2KB
+		}
+		reverse_proxy unix//run/board/auth.sock
+	}
+
+	handle {
+		respond 404
+	}
+}
