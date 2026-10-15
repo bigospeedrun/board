@@ -5,7 +5,7 @@
 #   board-migrate  one-off: migrations + role passwords (owner role), no network
 #   board-api      POST/GET /board/api/posts, NO network: unix sockets only
 #   board-auth     /board/auth/*, network only to board-egress
-#   board-egress   allowlist proxy: CONNECT github.com:443, api.github.com:443
+#   board-egress   allowlist proxy (vendored from the site, 8a0ffdc): CONNECT github.com:443, api.github.com:443
 #   board-admin    one-off maintainer CLI (ban, revoke, hide, stats), no network
 #
 # Host setup (runbook): /etc/bigospeedrun/board/ holds the secret files, root-owned,
@@ -150,7 +150,10 @@ services:
     mem_limit: 96m
     pids_limit: 32
     networks: [board-egress-internal, board-egress-out]
-    command: [node, --experimental-strip-types, src/egress-proxy.ts]
+    command: [node, src/vendor/egress-proxy.mjs]
+    environment:
+      EGRESS_ALLOW: github.com:443,api.github.com:443   # exact host:port pairs, nothing else
+      EGRESS_PORT: '3128'
 
   board-admin:
     <<: *hardening
