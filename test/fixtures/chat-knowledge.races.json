@@ -1,0 +1,85 @@
+{
+ "updatedAt": "2026-10-15T22:17:39Z",
+ "problems": [
+  {
+   "path": "/3sum",
+   "title": "3SUM"
+  },
+  {
+   "path": "/apsp",
+   "title": "All-pairs shortest paths"
+  },
+  {
+   "path": "/subset-sum",
+   "title": "Subset Sum"
+  },
+  {
+   "path": "/integer-multiplication",
+   "title": "Integer multiplication"
+  },
+  {
+   "path": "/exact-dft",
+   "title": "Exact discrete Fourier transform"
+  },
+  {
+   "path": "/matrix-multiplication",
+   "title": "Matrix Multiplication"
+  }
+ ],
+ "otherBounds": {
+  "rows": [
+   {
+    "path": "/other/quasi-riemann",
+    "title": "Quasi-Riemann hypothesis"
+   },
+   {
+    "path": "/other/catalan",
+    "title": "Catalan’s constant"
+   },
+   {
+    "path": "/other/primitive-roots",
+    "title": "Primitive-root primes"
+   },
+   {
+    "path": "/other/matroid-prophet",
+    "title": "One-sample matroid prophet inequality"
+   },
+   {
+    "path": "/other/contingency-tables",
+    "title": "Contingency-table sampling"
+   },
+   {
+    "path": "/other/average-sensitivity",
+    "title": "Average sensitivity"
+   },
+   {
+    "path": "/other/van-der-waerden",
+    "title": "Van der Waerden numbers"
+   },
+   {
+    "path": "/other/sidorenko",
+    "title": "Sidorenko counterexample"
+   },
+   {
+    "path": "/other/unit-distance-grid",
+    "title": "Unit-distance final grid"
+   },
+   {
+    "path": "/other/snaky",
+    "title": "Snaky"
+   },
+   {
+    "path": "/other/ordered-matrix-removal",
+    "title": "Ordered matrix removal"
+   },
+   {
+    "path": "/other/heilbronn-triangle",
+    "title": "Heilbronn triangle"
+   },
+   {
+    "path": "/other/haldane-gap",
+    "title": "Spin-one Haldane gap"
+   }
+  ]
+ }
+}

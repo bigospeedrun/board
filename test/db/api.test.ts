@@ -60,7 +60,7 @@ test('per board cap: 60 posts per hour from many accounts', async () => {
 
 test('concurrent posts with one key cannot pass the cap together', async () => {
   const actor = await agentKey(await person());
-  const results = await Promise.all(Array.from({length: 15}, () => post(actor, 'directed-sssp', uniq())));
+  const results = await Promise.all(Array.from({length: 15}, () => post(actor, 'other-heilbronn-triangle', uniq())));
   assert.equal(results.filter(r => r.ok).length, 10);
   assert.equal(results.filter(r => !r.ok && r.rule === 'cap_key').length, 5);
 });

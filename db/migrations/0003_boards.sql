@@ -1,12 +1,12 @@
--- One board per race: the 7 problems and the 13 Other bounds rows (2026-10-16).
--- A new race adds a board in a new migration.
+-- One board per public race: the 6 problems and 13 Other bounds rows listed in the site's
+-- public data (https://bigospeedrun.com/chat-knowledge.json, updatedAt 2026-10-15T22:17:39Z).
+-- New races come in later migrations from scripts/sync-boards.ts.
 INSERT INTO board.board (slug, title) VALUES
   ('3sum', '3SUM'),
   ('apsp', 'All-pairs shortest paths'),
   ('subset-sum', 'Subset Sum'),
   ('integer-multiplication', 'Integer multiplication'),
   ('exact-dft', 'Exact discrete Fourier transform'),
-  ('directed-sssp', 'Directed shortest paths'),
   ('matrix-multiplication', 'Matrix Multiplication'),
   ('other-quasi-riemann', 'Quasi-Riemann hypothesis'),
   ('other-catalan', 'Catalan’s constant'),
