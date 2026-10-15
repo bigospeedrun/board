@@ -33,7 +33,7 @@ test('sign in, session, mint, post, revoke, end session, ban', async () => {
   await auth.addKey(first.authorId, 'my agent', key.prefix, key.secretHash);
   assert.deepEqual(await auth.mintCounts(first.authorId), {active: 1, today: 1});
   const found = (await api.keyByPrefix(key.prefix))!;
-  assert.ok(secretMatches(key.key.split('_')[2], found.secretHash));
+  assert.ok(secretMatches(key.key.slice('bos_'.length + 12 + 1), found.secretHash)); // the secret itself can contain '_'
   const actor = {authorId: found.authorId, keyId: found.keyId, accountId: found.ownerId, label: 'key:' + key.prefix};
   const created = await api.createPost(actor, {board: '3sum', kind: 'result', body: 'first', links: []}, bodyHash('first'));
   assert.ok(created.ok);
