@@ -8,10 +8,11 @@
 #   board-egress   allowlist proxy (vendored from the site, 8a0ffdc): CONNECT github.com:443, api.github.com:443
 #   board-admin    one-off maintainer CLI (ban, revoke, hide, stats), no network
 #
-# Host setup (runbook): /etc/bigospeedrun/board/ holds the secret files, root-owned,
-# mode 0440, group 999 (postgres) for owner_password and group 1000 (node) for the
-# rest; /run/board is a directory owned by group 2626 (boardsock) mode 2770, and
-# Caddy's user is in that group so it can reach the two sockets.
+# Aligned with ~/nil/self-host-playbook.md, "Boxed public write surface". Host setup:
+# /etc/bigospeedrun/board/ holds the secret files, root-owned, mode 0440, group 999
+# (postgres) for owner_password and group 10001 for the rest; /run/bigospeedrun-board
+# is a directory owned by Caddy's group (wg-caddy, gid in BOARD_SOCKET_GID) with mode
+# 2770, so Caddy reaches the two sockets and nothing else does.
 x-hardening: &hardening
   read_only: true
   tmpfs: ['/tmp:size=16m,mode=1777']
@@ -23,10 +24,11 @@ x-hardening: &hardening
 x-board: &board
   <<: *hardening
   image: ${BOARD_IMAGE:?set BOARD_IMAGE to bigospeedrun-board@sha256:...}
-  user: '1000:1000'
-  group_add: ['2626']
+  user: '10001:10001'
+  group_add: ['${BOARD_SOCKET_GID:?set BOARD_SOCKET_GID to the gid of wg-caddy}']
   cpus: 0.25
   mem_limit: 256m
+  memswap_limit: 256m             # no swap use
   pids_limit: 64
   environment: &board-env
     NODE_ENV: production
@@ -46,6 +48,7 @@ services:
     network_mode: none
     cpus: 0.5
     mem_limit: 512m
+    memswap_limit: 512m
     pids_limit: 100
     tmpfs: ['/tmp:size=64m,mode=1777']
     environment:
@@ -70,7 +73,7 @@ services:
   board-migrate:
     <<: *hardening
     image: ${BOARD_IMAGE}
-    user: '1000:1000'
+    user: '10001:10001'
     network_mode: none
     restart: 'no'
     command: [node, --experimental-strip-types, db/migrate.ts]
@@ -107,7 +110,7 @@ services:
       retries: 5
     volumes:
       - board-db-socket:/var/run/postgresql
-      - ${BOARD_SOCKET_DIR:-/run/board}:/run/board
+      - ${BOARD_SOCKET_DIR:-/run/bigospeedrun-board}:/run/board
       - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/app_password:/run/secrets/app_password:ro
 
   board-auth:
@@ -133,7 +136,7 @@ services:
       retries: 5
     volumes:
       - board-db-socket:/var/run/postgresql
-      - ${BOARD_SOCKET_DIR:-/run/board}:/run/board
+      - ${BOARD_SOCKET_DIR:-/run/bigospeedrun-board}:/run/board
       - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/auth_password:/run/secrets/auth_password:ro
       - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/github_client_secret:/run/secrets/github_client_secret:ro
       - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/state_secret:/run/secrets/state_secret:ro
@@ -145,9 +148,10 @@ services:
   board-egress:
     <<: *hardening
     image: ${BOARD_IMAGE}
-    user: '1000:1000'
+    user: '10001:10001'
     cpus: 0.1
     mem_limit: 96m
+    memswap_limit: 96m
     pids_limit: 32
     networks: [board-egress-internal, board-egress-out]
     command: [node, src/vendor/egress-proxy.mjs]
@@ -158,7 +162,7 @@ services:
   board-admin:
     <<: *hardening
     image: ${BOARD_IMAGE}
-    user: '1000:1000'
+    user: '10001:10001'
     network_mode: none
     restart: 'no'
     profiles: [admin]             # never started by `up`; run with `compose run --rm board-admin ...`

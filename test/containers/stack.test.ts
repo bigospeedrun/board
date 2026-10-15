@@ -19,7 +19,7 @@ const CADDY = 'caddy:2.11@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa
 const project = 'bosboardtest' + randomBytes(3).toString('hex');
 const work = mkdtempSync(join(tmpdir(), 'bos-board-stack-'));
 const secrets = join(work, 'secrets'), sockets = join(work, 'run');
-const env = {...process.env, BOARD_IMAGE: IMAGE, BOARD_SECRETS_DIR: secrets, BOARD_SOCKET_DIR: sockets, BOARD_GITHUB_CLIENT_ID: 'Iv1.testclient00', BOARD_WRITES: 'on'};
+const env = {...process.env, BOARD_IMAGE: IMAGE, BOARD_SECRETS_DIR: secrets, BOARD_SOCKET_DIR: sockets, BOARD_GITHUB_CLIENT_ID: 'Iv1.testclient00', BOARD_WRITES: 'on', BOARD_SOCKET_GID: '10001'};
 const files = ['-f', join(BOARD, 'deploy/compose.board.yml'), '-f', join(work, 'test.override.yml')];
 const compose = (args: string[], extraEnv: Record<string, string> = {}) => {
   const r = spawnSync('docker', ['compose', '-p', project, ...files, ...args], {env: {...env, ...extraEnv}, encoding: 'utf8'});
@@ -45,7 +45,7 @@ before(async () => {
   writeFileSync(join(work, 'test.override.yml'), `services:
   board-caddy:
     image: ${CADDY}
-    user: '1000:1000'
+    user: '10001:10001'           # test only: the socket dir cannot carry wg-caddy's group here
     read_only: true
     tmpfs: [/tmp, /config, /data]
     cap_drop: [ALL]
@@ -55,7 +55,7 @@ before(async () => {
     volumes:
       - ${join(work, 'Caddyfile')}:/etc/caddy/Caddyfile:ro
       - ${join(BOARD, 'deploy/board.caddy')}:/etc/caddy/board.caddy:ro
-      - ${sockets}:/run/board
+      - ${sockets}:/run/bigospeedrun-board
     depends_on:
       board-api: {condition: service_healthy}
       board-auth: {condition: service_healthy}
@@ -160,7 +160,7 @@ test('item 11: DB logins need the right password; app role cannot change rows', 
 
 test('item 11: containers run non-root on a read-only root fs', () => {
   for (const service of ['board-api', 'board-auth', 'board-egress']) {
-    assert.equal(exec(service, 'id', '-u').stdout.trim(), '1000', service);
+    assert.equal(exec(service, 'id', '-u').stdout.trim(), '10001', service);
     assert.notEqual(exec(service, 'touch', '/app/evil').status, 0, service);
   }
   assert.equal(exec('board-db', 'id', '-u').stdout.trim(), '999');
