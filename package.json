@@ -1,0 +1,18 @@
+{
+  "name": "bigospeedrun-board",
+  "private": true,
+  "type": "module",
+  "description": "Race board (phase E of ~/nil/bigospeedrun-notes/self-host-scope.md): board-api, board-auth, egress proxy, schema. Vercel and the site build do not use this directory.",
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/unit/*.test.ts",
+    "test:db": "node --experimental-strip-types --test --test-concurrency=1 test/db/*.test.ts",
+    "test:containers": "node --experimental-strip-types --test --test-concurrency=1 test/containers/*.test.ts"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "pg": "8.16.3"
+  },
+  "engines": {
+    "node": "24.x"
+  }
+}
