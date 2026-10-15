@@ -14,7 +14,7 @@
 # Caddy's user is in that group so it can reach the two sockets.
 x-hardening: &hardening
   read_only: true
-  tmpfs: [/tmp:size=16m,mode=1777]
+  tmpfs: ['/tmp:size=16m,mode=1777']
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
   restart: unless-stopped
@@ -47,17 +47,20 @@ services:
     cpus: 0.5
     mem_limit: 512m
     pids_limit: 100
-    tmpfs: [/tmp:size=64m,mode=1777]
+    tmpfs: ['/tmp:size=64m,mode=1777']
     environment:
       POSTGRES_USER: board_owner
       POSTGRES_DB: board
       POSTGRES_PASSWORD_FILE: /run/secrets/owner_password
+      # The image trusts every local socket login by default; the board services share
+      # the socket, so require passwords everywhere (checked by the container tests).
+      POSTGRES_INITDB_ARGS: --auth-local=scram-sha-256 --auth-host=scram-sha-256
     command: [postgres, -c, "listen_addresses=", -c, max_connections=20, -c, shared_buffers=64MB,
               -c, "log_line_prefix=%m %u ", -c, log_min_duration_statement=1000]
     volumes:
       - board-db-data:/var/lib/postgresql
       - board-db-socket:/var/run/postgresql
-      - /etc/bigospeedrun/board/owner_password:/run/secrets/owner_password:ro
+      - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/owner_password:/run/secrets/owner_password:ro
     healthcheck:
       test: [CMD, pg_isready, -h, /var/run/postgresql, -U, board_owner, -d, board]
       interval: 10s
@@ -81,10 +84,10 @@ services:
       BOARD_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
     volumes:
       - board-db-socket:/var/run/postgresql
-      - /etc/bigospeedrun/board/owner_password_node:/run/secrets/owner_password:ro
-      - /etc/bigospeedrun/board/app_password:/run/secrets/app_password:ro
-      - /etc/bigospeedrun/board/auth_password:/run/secrets/auth_password:ro
-      - /etc/bigospeedrun/board/admin_password:/run/secrets/admin_password:ro
+      - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/owner_password_node:/run/secrets/owner_password:ro
+      - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/app_password:/run/secrets/app_password:ro
+      - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/auth_password:/run/secrets/auth_password:ro
+      - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/admin_password:/run/secrets/admin_password:ro
     depends_on:
       board-db: {condition: service_healthy}
 
@@ -97,10 +100,15 @@ services:
       PGUSER: board_app
       PGPASSWORD_FILE: /run/secrets/app_password
       BOARD_SOCKET: /run/board/api.sock
+    healthcheck:
+      test: [CMD, node, -e, "require('http').get({socketPath:'/run/board/api.sock',path:'/board/api/posts?board=3sum&limit=1'},r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
     volumes:
       - board-db-socket:/var/run/postgresql
-      - /run/board:/run/board
-      - /etc/bigospeedrun/board/app_password:/run/secrets/app_password:ro
+      - ${BOARD_SOCKET_DIR:-/run/board}:/run/board
+      - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/app_password:/run/secrets/app_password:ro
 
   board-auth:
     <<: *board
@@ -118,12 +126,17 @@ services:
       HTTPS_PROXY: http://board-egress:3128
       HTTP_PROXY: http://board-egress:3128
       NO_PROXY: ''
+    healthcheck:
+      test: [CMD, node, -e, "require('http').get({socketPath:'/run/board/auth.sock',path:'/board/auth/account'},r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
     volumes:
       - board-db-socket:/var/run/postgresql
-      - /run/board:/run/board
-      - /etc/bigospeedrun/board/auth_password:/run/secrets/auth_password:ro
-      - /etc/bigospeedrun/board/github_client_secret:/run/secrets/github_client_secret:ro
-      - /etc/bigospeedrun/board/state_secret:/run/secrets/state_secret:ro
+      - ${BOARD_SOCKET_DIR:-/run/board}:/run/board
+      - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/auth_password:/run/secrets/auth_password:ro
+      - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/github_client_secret:/run/secrets/github_client_secret:ro
+      - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/state_secret:/run/secrets/state_secret:ro
     depends_on:
       board-db: {condition: service_healthy}
       board-migrate: {condition: service_completed_successfully}
@@ -154,7 +167,7 @@ services:
       PGPASSWORD_FILE: /run/secrets/admin_password
     volumes:
       - board-db-socket:/var/run/postgresql
-      - /etc/bigospeedrun/board/admin_password:/run/secrets/admin_password:ro
+      - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/admin_password:/run/secrets/admin_password:ro
 
 networks:
   board-egress-internal: {internal: true}   # no gateway: board-auth cannot reach the internet

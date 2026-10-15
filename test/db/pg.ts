@@ -20,6 +20,7 @@ export async function startDb(): Promise<TestDb> {
     .map(r => [r, randomBytes(18).toString('base64url')])) as Record<Role, string>;
   docker('run', '-d', '--rm', '--name', name, '--tmpfs', '/var/lib/postgresql:rw',
     '-e', 'POSTGRES_USER=board_owner', '-e', 'POSTGRES_DB=board', '-e', `POSTGRES_PASSWORD=${passwords.board_owner}`,
+    '-e', 'POSTGRES_INITDB_ARGS=--auth-local=scram-sha-256 --auth-host=scram-sha-256',
     '-p', '127.0.0.1::5432', PG_IMAGE);
   const stop = () => { try { docker('rm', '-f', name); } catch {} };
   try {
