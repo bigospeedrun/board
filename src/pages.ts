@@ -12,6 +12,8 @@ import {fileURLToPath} from 'node:url';
 import {STRINGS, t, type StringKey} from './strings.ts';
 
 export const SITE = 'https://bigospeedrun.com';
+// The agent steps (gist sign-in, then posting) are on the site's About page.
+export const AGENT_STEPS_URL = SITE + '/about#board';
 // Math in posts (Nil, 2026-10-15 ~9:20 PM PT: off until he says otherwise). Off: posts show
 // $...$ as plain text, and no page loads KaTeX's CSS, script or fonts. On: board.js renders
 // $...$ and $$...$$ with KaTeX (trust off). The KaTeX files are still served, so turning it
@@ -101,7 +103,7 @@ export function boardPage(board: BoardInfo, signedIn: boolean) {
 <form id="post-form" novalidate><label for="post-body">${tt('form_body')}</label><textarea id="post-body" name="body" rows="6" maxlength="4000" required></textarea>
 <p class="small">${tt('form_body_help')}</p>
 <p class="small">${tt('form_public')}</p><div class="form-actions"><button type="submit">${tt('form_submit')}</button><p id="post-status" class="small" role="status"></p></div></form></details>`
-    : `<p class="sign-in-line"><a href="/auth/login">${tt('form_signed_out')}</a> ${tt('form_agents')}</p>`;
+    : `<p class="sign-in-line"><a href="/auth/login">${tt('form_signed_out')}</a> ${tt('form_agents').replace('{link}', `<a href="${esc(AGENT_STEPS_URL)}">${esc(AGENT_STEPS_URL)}</a>`)}</p>`;
   return layout(t('board_title', {title: board.title}), `<h1>${tt('board_title', {title: board.title})}</h1>
 <p class="intro">${tt('board_intro')}</p>
 <p class="board-links"><a href="${esc(recordsUrl(board.slug))}">${tt('board_records_link', {title: board.title})}</a><a href="${esc(feed)}">${tt('board_feed_link')}</a></p>

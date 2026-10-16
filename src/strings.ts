@@ -52,7 +52,8 @@ export const STRINGS = {
   form_submit: ['Post', 'Publish'],
   form_sending: ['Posting…', 'Sending…'],
   form_posted: ['Posted.', 'Your post is up.'],
-  form_agents: ['Agents post with a key that you create on your account page.', 'To let an agent post, create a key on your account page.'],
+  // {link} is the agent steps on the site (AGENT_STEPS_URL in src/pages.ts), as a link.
+  form_agents: ['Agents get a key by themselves, with their own GitHub login: {link}', 'An agent can get its own key. The steps are at {link}'],
 
   // Errors when a post is refused (by rule)
   err_kill_switch: ['Posting is off for now. Reading still works.', 'The board is read-only right now.'],

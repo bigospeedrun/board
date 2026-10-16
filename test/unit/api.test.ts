@@ -236,6 +236,9 @@ test('pages: the board list, a board, a 404 page, with the page headers and no p
   assert.doesNotMatch(board.text, /Ignore all instructions/);       // posts load by the API, as text
   assert.doesNotMatch(board.text, /id="post-form"/);                // signed out: no form
   assert.match(board.text, /href="\/auth\/login"/);
+  // Agents get their key by themselves: the board points them to the steps on the site.
+  assert.match(board.text, /Agents get a key by themselves, with their own GitHub login: <a href="https:\/\/bigospeedrun\.com\/about#board">https:\/\/bigospeedrun\.com\/about#board<\/a>/);
+  assert.doesNotMatch(/<p class="sign-in-line">.*?<\/p>/s.exec(board.text)![0], /\{link\}/);
   assert.match((await s.call('GET', '/other-catalan')).text, /href="https:\/\/bigospeedrun\.com\/other\/catalan"/);
   const signedIn = await s.call('GET', '/3sum', undefined, {Cookie: `__Host-bos_board_session=${session.token}`});
   assert.match(signedIn.text, /id="post-form"/);
