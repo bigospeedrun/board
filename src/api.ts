@@ -5,7 +5,7 @@
 // files under /board/assets/. Everything else is 404. The handler talks to a Store, so unit tests use a fake one.
 import type {IncomingMessage, ServerResponse} from 'node:http';
 import {LIMITS, type Config, type PostInput, validatePost, contentProblem, bodyHash, parseKey,
-        secretMatches, cookieValue, SESSION_COOKIE, sha256, parseCursor, LINE_BREAK, HUMAN_MODEL} from './rules.ts';
+        secretMatches, cookieValue, SESSION_COOKIE, sha256, parseCursor, LINE_BREAK, HUMAN_MODEL, RESERVED_SLUGS} from './rules.ts';
 import {ASSETS, PAGE_HEADERS, boardPage, indexPage, notFoundPage, type BoardInfo} from './pages.ts';
 
 export type Cursor = {at: string; id: string};
@@ -202,7 +202,7 @@ export function createApi(store: Store, config: Config, refusals = new RefusalLo
   // The board list changes only with a migration, so the pages read it once a minute.
   let boards: {at: number; list: BoardInfo[]} | null = null;
   async function boardList() {
-    if (!boards || Date.now() - boards.at > 60_000) boards = {at: Date.now(), list: await store.boards()};
+    if (!boards || Date.now() - boards.at > 60_000) boards = {at: Date.now(), list: (await store.boards()).filter(b => !RESERVED_SLUGS.includes(b.slug))};
     return boards.list;
   }
   async function signedIn(req: IncomingMessage) {

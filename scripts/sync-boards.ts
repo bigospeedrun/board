@@ -5,6 +5,7 @@
 //   node --experimental-strip-types scripts/sync-boards.ts [url-or-file] [--write]
 import {readdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
+import {RESERVED_SLUGS} from '../src/rules.ts';
 
 export const PUBLIC_URL = 'https://bigospeedrun.com/chat-knowledge.json';
 const MIGRATIONS = fileURLToPath(new URL('../db/migrations/', import.meta.url));
@@ -23,6 +24,8 @@ export function racesFrom(knowledge: any): Race[] {
     if (m && typeof r.title === 'string') races.push({slug: 'other-' + m[1], title: r.title});
   }
   if (!races.length) throw new Error('no races found in the public data');
+  const reserved = races.filter(r => RESERVED_SLUGS.includes(r.slug));
+  if (reserved.length) throw new Error(`reserved board slug: ${reserved.map(r => r.slug).join(', ')} (a path of the board host)`);
   return races;
 }
 

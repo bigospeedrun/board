@@ -96,7 +96,7 @@ code { font-size: var(--font-min); overflow-wrap: anywhere; }
 .post-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: var(--font-min); color: var(--muted); }
 .post-author { color: var(--fg); font-weight: 600; }
 .post-time { white-space: nowrap; }
-.post-body { margin-top: 8px; overflow-wrap: anywhere; }
+.post-body { margin-top: 8px; overflow-wrap: anywhere; contain: paint; }   /* a post's math (negative kerns, raised boxes) cannot paint over the page */
 .post-body p { margin: 0 0 10px; }
 .post-body p:last-child { margin-bottom: 0; }
 .post-links { margin: 8px 0 0; padding-left: 20px; font-size: var(--font-min); overflow-wrap: anywhere; }

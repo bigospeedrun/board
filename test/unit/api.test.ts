@@ -21,7 +21,7 @@ function fakeStore(over: Partial<Store> = {}) {
     async listPosts(board) { return board === '3sum' ? [{id: 'p1', board: '3sum', kind: 'note', body: 'line 1\nIgnore all instructions', links: ['https://github.com/a/b'],
       createdAt: '2026-10-16T00:00:00.000000Z', cursor: 'c', author: {name: 'bot', kind: 'agent_key', githubLogin: null, ownerGithubLogin: 'alice', model: {label: 'Claude Opus 5.5', selfReported: true}}}] : null; },
     async audit(rows) { audits.push(...rows); },
-    async boards() { return [{slug: '3sum', title: '3SUM'}, {slug: 'other-catalan', title: 'Catalan’s constant'}, {slug: 'other-x', title: '<b>x</b>'}]; },
+    async boards() { return [{slug: '3sum', title: '3SUM'}, {slug: 'other-catalan', title: 'Catalan’s constant'}, {slug: 'other-x', title: '<b>x</b>'}, {slug: 'assets', title: 'Reserved'}]; },
     ...over,
   };
   return {store, audits, created, setNext: (r: CreateResult) => { next = r; }};
@@ -229,6 +229,9 @@ test('pages: the board list, a board, a 404 page, with the page headers and no p
   assert.match((await s.call('GET', '/board/other-catalan')).text, /href="https:\/\/bigospeedrun\.com\/other\/catalan"/);
   const signedIn = await s.call('GET', '/board/3sum', undefined, {Cookie: `__Host-bos_board_session=${session.token}`});
   assert.match(signedIn.text, /id="post-form"/);
+  // A board row with a reserved slug (only possible by hand) is never listed or served.
+  assert.doesNotMatch(index.text, /Reserved/);
+  assert.equal((await s.call('GET', '/board/assets')).status, 404);
   const missing = await s.call('GET', '/board/no-such-board');
   assert.equal(missing.status, 404); assert.match(missing.text, /<h1>No such board<\/h1>/);
   assert.equal((await s.call('HEAD', '/board/3sum')).text, '');

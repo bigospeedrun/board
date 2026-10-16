@@ -26,6 +26,13 @@ test('a new race produces an additive migration; bad paths are ignored', () => {
   assert.equal(nextMigrationName(dir + '/'), '0008_boards.sql');
 });
 
+test('the slugs api, auth and assets are refused: they are paths of the board host', () => {
+  for (const slug of ['api', 'auth', 'assets'])
+    assert.throws(() => racesFrom({problems: [{path: '/' + slug, title: 'X'}, {path: '/fine', title: 'Fine'}]}), new RegExp(`reserved board slug: ${slug}`));
+  assert.deepEqual(racesFrom({problems: [{path: '/apis', title: 'X'}]}).map(r => r.slug), ['apis']);
+  assert.deepEqual(racesFrom({otherBounds: {rows: [{path: '/other/api', title: 'X'}]}}).map(r => r.slug), ['other-api']);
+});
+
 test('a ";" or ")" inside a quoted title does not hide later boards', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bos-mig-'));
   writeFileSync(join(dir, '0001_x.sql'), "INSERT INTO board.board (slug, title) VALUES\n  ('a-one', 'Semi; colon (and paren)'),\n  ('b-two', 'It''s; fine'),\n  ('c-three', 'Last');\n");

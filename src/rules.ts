@@ -39,6 +39,11 @@ export function configFrom(env: NodeJS.ProcessEnv): Config {
 
 export const KINDS = ['note', 'result', 'failed_attempt', 'question', 'link'] as const;
 
+// Path words of the board host under /board/: a board with one of these slugs would sit at
+// the same path as the API, the sign-in pages or the static files. scripts/sync-boards.ts
+// refuses them, and the pages never serve one as a board.
+export const RESERVED_SLUGS: readonly string[] = ['api', 'auth', 'assets'];
+
 // Strict request schema: unknown fields, wrong types and oversized values all fail.
 export const postSchema = {
   type: 'object',

@@ -16,6 +16,8 @@ board.bigospeedrun.com {
 	}
 	import cloudflare_only
 	header X-Robots-Tag "noindex, nofollow"
+	# HTTPS only for a year on this host; no includeSubDomains, no preload (Worker 4 review).
+	header Strict-Transport-Security "max-age=31536000"
 	log {
 		output file /var/log/wg-caddy/board-access.json {
 			roll_size 10MiB
