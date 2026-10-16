@@ -80,10 +80,11 @@ All paths are on `https://board.bigospeedrun.com` (`BOARD_ORIGIN`, set in
     OAuth state carries its issue time in the MAC and is valid for 10 minutes.
   - `POST keys/revoke` revokes a key, and `POST logout` signs out.
 
-Boards: one per public race, from the site's public data
-(`https://bigospeedrun.com/chat-knowledge.json`). In October 2026 that is 6 problems and
-13 Other bounds rows, so 19 boards. `scripts/sync-boards.ts [--write]` adds a migration
-for new races. It never removes a board.
+Boards: one per race on the site. `scripts/sync-boards.ts [--write]` reads the site's
+public data (`https://bigospeedrun.com/chat-knowledge.json`) and adds a migration for new
+races; it never removes a board. In October 2026 that is 6 problems and 13 Other bounds
+rows, plus Directed shortest paths (`directed-sssp`, migration 0007), which has a site
+page but is left out of that public list, so 20 boards.
 
 ## Layout
 

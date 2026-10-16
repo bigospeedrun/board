@@ -95,7 +95,7 @@ test('the dump program streams meta.json and an encrypted custom-format dump of 
   assert.equal(meta.dump.role, 'board_dump');
   assert.equal(meta.encryption.recipient, recipient);
   assert.equal(meta.migrations, null);
-  assert.equal(meta.row_counts['board_meta.migration'], 6);
+  assert.equal(meta.row_counts['board_meta.migration'], 7);
   assert.equal(meta.row_counts['board.audit_log'], 1);
   assert.equal(meta.row_counts['board.board'] > 0, true);
   // The ciphertext decrypts with the matching identity to a pg_dump custom archive.

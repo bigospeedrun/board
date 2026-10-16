@@ -23,7 +23,7 @@ test('migrations apply once; a rerun applies nothing', async () => {
   const owner = await db.client('board_owner');
   assert.deepEqual(await migrate(owner, {}), []);
   const boards = (await owner.query('SELECT count(*)::int AS n FROM board.board')).rows[0].n;
-  assert.equal(boards, 19);
+  assert.equal(boards, 20);   // 19 from 0003, directed-sssp from 0007
   await owner.end();
 });
 

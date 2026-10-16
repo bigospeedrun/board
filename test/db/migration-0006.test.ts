@@ -13,11 +13,12 @@ import {startDb, type TestDb} from './pg.ts';
 import {migrate} from '../../db/migrate.ts';
 
 const ALL = fileURLToPath(new URL('../../db/migrations/', import.meta.url));
-const before0006 = mkdtempSync(join(tmpdir(), 'bos-mig-'));
+const before0006 = mkdtempSync(join(tmpdir(), 'bos-mig-')), through0006 = mkdtempSync(join(tmpdir(), 'bos-mig-'));
 for (const f of readdirSync(ALL).filter(f => f < '0006')) copyFileSync(ALL + f, join(before0006, f));
+for (const f of readdirSync(ALL).filter(f => f < '0007')) copyFileSync(ALL + f, join(through0006, f));
 let db: TestDb;
 before(async () => { db = await startDb([], before0006 + '/'); });
-after(() => { db?.stop(); rmSync(before0006, {recursive: true, force: true}); });
+after(() => { db?.stop(); for (const d of [before0006, through0006]) rmSync(d, {recursive: true, force: true}); });
 
 // The previous image's feed query (src/store.ts at 0f4c10e), word for word.
 const OLD_FEED = `SELECT id, board_slug, body, links, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at, display_name, author_kind, github_login, owner_github_login, model FROM board.visible_post WHERE board_slug = $1
@@ -33,7 +34,7 @@ test('0006 copies each agent key model onto its posts, drops post.kind and autho
   await post(agent, 'result', 'by the agent', ['https://github.com/a/b', 'https://x.org/c']); await post(person, 'question', 'by the person'); await post(old, 'note', 'by a key with no model');
   await post(person, 'link', 'x'.repeat(3990), ['https://long.example/' + 'y'.repeat(200)]);   // body + links over 4000: the body is cut
 
-  assert.deepEqual(await migrate(owner, db.env, ALL), ['0006_post_model.sql']);
+  assert.deepEqual(await migrate(owner, db.env, through0006 + '/'), ['0006_post_model.sql']);
   const rows = (await owner.query(`SELECT body, model FROM board.post ORDER BY created_at`)).rows;
   assert.deepEqual(rows.slice(0, 3).map(r => [r.body, r.model]), [
     ['by the agent\n\nhttps://github.com/a/b\nhttps://x.org/c', 'Claude Opus 5.5'],   // links appended to the body, in order
@@ -55,6 +56,20 @@ test('0006 copies each agent key model onto its posts, drops post.kind and autho
     /column "kind" of relation "post" does not exist/);
   await app.end();
   // The view's readers keep their grants after the drop and re-create.
+  for (const role of ['board_app', 'board_admin', 'board_dump'] as const) {
+    const c = await db.client(role);
+    await c.query('SELECT 1 FROM board.visible_post LIMIT 1');
+    await c.end();
+  }
+});
+
+test('0007 adds the directed-sssp board and drops the compatibility links column of visible_post', async () => {
+  const owner = await db.client('board_owner');
+  assert.deepEqual(await migrate(owner, db.env, ALL), ['0007_directed_sssp_board.sql']);
+  assert.equal((await owner.query(`SELECT title FROM board.board WHERE slug = 'directed-sssp'`)).rows[0].title, 'Directed shortest paths');
+  const cols = (await owner.query(`SELECT column_name FROM information_schema.columns WHERE table_schema = 'board' AND table_name = 'visible_post'`)).rows.map(r => r.column_name);
+  assert.ok(!cols.includes('links') && cols.includes('model'));
+  await owner.end();
   for (const role of ['board_app', 'board_admin', 'board_dump'] as const) {
     const c = await db.client(role);
     await c.query('SELECT 1 FROM board.visible_post LIMIT 1');

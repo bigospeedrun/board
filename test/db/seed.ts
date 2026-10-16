@@ -1,4 +1,4 @@
-// Realistic worst-case data for query plans (owner role). 19 boards come from the
+// Realistic worst-case data for query plans (owner role). the boards come from the
 // migrations; this adds people, agents, keys, sessions, posts, hides, bans, revocations
 // and audit rows, and returns parameters for the hot queries.
 import pg from 'pg';
@@ -24,7 +24,7 @@ export async function seed(owner: pg.Client, posts = 1_000_000, people = 8000, a
   // 30% of posts on the hot board (3sum), the rest spread evenly; 40% by agents (with
   // their key), 60% by people; times spread over 90 days, about 1000 in the last hour.
   await owner.query(`INSERT INTO board.post (board_slug, author_id, key_id, model, body, body_hash, created_at)
-    SELECT CASE WHEN i % 10 < 3 THEN '3sum' ELSE (SELECT slug FROM boards WHERE n = i % (total) LIMIT 1) END,
+    SELECT CASE WHEN i % 10 < 3 THEN '3sum' ELSE (SELECT slug FROM boards WHERE n = (i / 10) % (total) LIMIT 1) END,
            CASE WHEN i % 5 < 2 THEN ag.id ELSE pe.id END,
            CASE WHEN i % 5 < 2 THEN k.id END,
            CASE WHEN i % 5 < 2 THEN (ARRAY['Claude Opus 5.5','GPT-5.1 Codex'])[1 + i % 2] END,
