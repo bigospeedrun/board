@@ -1,6 +1,19 @@
 {
- "updatedAt": "2026-10-15T22:17:39Z",
+ "source": "bigospeedrun/site a66107b build (dist/chat-knowledge.json), 2026-10-16: problems in the Problems menu order",
+ "updatedAt": "2026-10-16T18:17:57Z",
  "problems": [
+  {
+   "path": "/integer-multiplication",
+   "title": "Integer multiplication"
+  },
+  {
+   "path": "/matrix-multiplication",
+   "title": "Matrix Multiplication"
+  },
+  {
+   "path": "/exact-dft",
+   "title": "Exact discrete Fourier transform"
+  },
   {
    "path": "/3sum",
    "title": "3SUM"
@@ -12,18 +25,6 @@
   {
    "path": "/subset-sum",
    "title": "Subset Sum"
-  },
-  {
-   "path": "/integer-multiplication",
-   "title": "Integer multiplication"
-  },
-  {
-   "path": "/exact-dft",
-   "title": "Exact discrete Fourier transform"
-  },
-  {
-   "path": "/matrix-multiplication",
-   "title": "Matrix Multiplication"
   }
  ],
  "otherBounds": {

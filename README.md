@@ -127,7 +127,11 @@ Boards: one per public race, from the site's public data
 (`https://bigospeedrun.com/chat-knowledge.json`). In October 2026 that is 6 problems and
 13 Other bounds rows, so 19 boards. A race page the site hides (not in that list, such as
 directed-sssp) gets no board. `scripts/sync-boards.ts [--write]` adds a migration for new
-public races. It never removes a board.
+public races. It never removes a board. The list at `/` is in the site's order: the problems
+in the order of the site's Problems menu, then the Other bounds rows in the site's order (the
+public data lists both in that order). Each migration from the script states the whole order
+(`board.board.position`, migration 0009), so a new race lands in its place on the next sync,
+and a new order alone gets its own migration. A board that the site no longer lists goes last.
 
 ## Layout
 

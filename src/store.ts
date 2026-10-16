@@ -15,7 +15,7 @@ export const SQL = {
   lockAccount: `SELECT pg_advisory_xact_lock(hashtextextended('account:' || $1, 0))`,
   lockBoard: `SELECT pg_advisory_xact_lock(hashtextextended('board:' || $1, 0))`,
   boardExists: 'SELECT 1 FROM board.board WHERE slug = $1',
-  boards: 'SELECT slug, title FROM board.board ORDER BY created_at, title',
+  boards: 'SELECT slug, title FROM board.board ORDER BY position NULLS LAST, created_at, title',   // the site's order (0009)
   // $1 key id (null for a person), $2 account id, $3 board, $4 body hash, $5 author id,
   // $6 repeat window per author (h), $7 repeat window per board (h), $8-$11 the caps
   // per key, per account, per board, per account on this board.
