@@ -1,0 +1,277 @@
+#!/usr/bin/python3 -I
+"""Race board database backup, VPS side (phase E, 2026-10-16; not installed yet).
+
+A copy of the Wall Game dump program (VPS-BACKUP-20261004) with the board's constants.
+Database `board` in the board-db container of compose project bigospeedrun-board.
+Two callers, both as root: the forced command of the `bosbackup` SSH login (one sudoers
+rule with no arguments), and the board's auto-deploy.sh before a new migration (it saves
+the stream as pre-<commit>.tar). It writes ONE uncompressed tar stream to stdout with two
+members:
+
+  meta.json  source identity, versions, sizes, hashes, row counts, sequences, migrations
+  dump.age   pg_dump custom format, encrypted on this host to AGE_RECIPIENT
+
+The plaintext dump never touches the disk and never leaves this host: pg_dump stdout ->
+SHA-256 -> age stdin. Row counts, the migration list and the dump read ONE exported
+snapshot, so they describe the same committed state. This host holds no decryption
+identity and no credential for any backup store.
+
+Differences from Wall Game: board-db trusts no login, not even on its socket, and has no
+`postgres` role. So every psql and pg_dump call runs as the read-only role board_dump
+(migration 0005) with -h /var/run/postgresql, and the password goes in by
+`docker exec -e PGPASSWORD`: this program reads it from PASSWORD_FILE into its own
+environment, so it is never in argv. The source identity queries (server_version,
+pg_control_system) work for board_dump. "migrations" in meta.json is null: the backup
+host's tool compares migration lists only for Drizzle's table, and the restore test reads
+board_meta.migration from the restored copy instead.
+"""
+import fcntl
+import hashlib
+import json
+import os
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import syslog
+import tarfile
+import tempfile
+import time
+
+PRODUCT = "bigospeedrun-board"
+COMPOSE_PROJECT = "bigospeedrun-board"
+COMPOSE_SERVICE = "board-db"
+DATABASE = "board"
+DUMP_ROLE = "board_dump"
+SOCKET_DIR = "/var/run/postgresql"
+PASSWORD_FILE = "/etc/bigospeedrun/board/dump_password"
+# The board's own age recipient (a public key; the identity stays on the backup host).
+AGE_RECIPIENT = "age1swnzlnqmg5q9wqwpyqs8l7m2y20cnfa5v2f5987z329udjrx592q6yn4vh"
+
+DOCKER = "/usr/bin/docker"
+AGE = "/usr/bin/age"
+WORK_PARENT = "/var/tmp"
+LOCK_FILE = "/run/bos-board-backup.lock"
+LOCK_WAIT_TIMEOUT = "60s"
+MAX_SECONDS = 1800
+META_FORMAT = "wallgame-backup-meta/1"  # the format the backup host's vpsbackup.py reads
+END = "__BOSBACKUP_END__"
+CHUNK = 1 << 20
+
+
+def log(msg):
+    line = f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {msg}"
+    print(line, file=sys.stderr, flush=True)
+    syslog.syslog(syslog.LOG_INFO, msg)
+
+
+def die(msg):
+    log(f"FAIL {msg}")
+    sys.exit(1)
+
+
+def run(args):
+    r = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if r.returncode != 0:
+        die(f"{args[0]} {args[1]} exit={r.returncode}: {r.stderr.strip()[:300]}")
+    return r.stdout
+
+
+def utc():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def find_container():
+    ids = run([DOCKER, "ps", "-q", "--no-trunc",
+               "--filter", f"label=com.docker.compose.project={COMPOSE_PROJECT}",
+               "--filter", f"label=com.docker.compose.service={COMPOSE_SERVICE}",
+               "--filter", "status=running"]).split()
+    if len(ids) != 1:
+        die(f"expected 1 running {COMPOSE_PROJECT}/{COMPOSE_SERVICE} container, found {len(ids)}")
+    info = json.loads(run([DOCKER, "inspect", ids[0]]))[0]
+    health = (info["State"].get("Health") or {}).get("Status")
+    if health != "healthy":
+        die(f"database container health is {health!r}, not 'healthy'")
+    return ids[0], info
+
+
+def load_password():
+    with open(PASSWORD_FILE) as f:
+        password = f.read().strip()
+    if len(password) < 24:
+        die("the dump password file is empty or short")
+    os.environ["PGPASSWORD"] = password  # for `docker exec -e PGPASSWORD`; never in argv
+
+
+def psql_args(cid, *extra):
+    return [DOCKER, "exec", *extra, "-e", "PGPASSWORD", "-u", "postgres", cid, "psql", "-X", "-v", "ON_ERROR_STOP=1",
+            "-h", SOCKET_DIR, "-U", DUMP_ROLE, "-d", DATABASE, "--no-password"]
+
+
+def dump_role_query(cid, sql):
+    return run(psql_args(cid) + ["-At", "-c", sql]).strip()
+
+
+class Session:
+    """One psql session as the dump role that holds the exported snapshot open."""
+
+    def __init__(self, cid):
+        self.p = subprocess.Popen(
+            psql_args(cid, "-i") + ["-q", "-At", "-F", "\t"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+
+    def ask(self, sql):
+        self.p.stdin.write(f"{sql}\n\\echo {END}\n")
+        self.p.stdin.flush()
+        rows = []
+        while True:
+            line = self.p.stdout.readline()
+            if line == "":
+                die(f"dump-role session ended early (exit={self.p.wait()})")
+            line = line.rstrip("\n")
+            if line == END:
+                return rows
+            rows.append(line.split("\t"))
+
+    def close(self):
+        self.p.stdin.write("COMMIT;\n")
+        self.p.stdin.close()
+        if self.p.wait() != 0:
+            die(f"dump-role session exit={self.p.returncode}")
+
+
+def main():
+    if len(sys.argv) != 1:
+        die("this program takes no arguments")
+    os.umask(0o077)
+    signal.signal(signal.SIGALRM, lambda *_: die(f"timeout after {MAX_SECONDS} s"))
+    signal.alarm(MAX_SECONDS)
+    syslog.openlog("bos-board-backup", syslog.LOG_PID)
+    lock = open(LOCK_FILE, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        die("another backup is running")
+    if not AGE_RECIPIENT.startswith("age1"):
+        die("AGE_RECIPIENT is not set")
+    load_password()
+    started = utc()
+    log(f"start product={PRODUCT} project={COMPOSE_PROJECT} service={COMPOSE_SERVICE} db={DATABASE}")
+
+    cid, info = find_container()
+    source = {
+        "host": socket.gethostname(),
+        "compose_project": COMPOSE_PROJECT,
+        "compose_service": COMPOSE_SERVICE,
+        "container_id": cid,
+        "container_name": info["Name"].lstrip("/"),
+        "image_ref": info["Config"]["Image"],
+        "image_id": info["Image"],
+        "database": DATABASE,
+        "pg_server_version": dump_role_query(cid, "SHOW server_version"),
+        "pg_system_identifier": dump_role_query(cid, "SELECT system_identifier FROM pg_control_system()"),
+    }
+    pg_dump_version = run([DOCKER, "exec", "-u", "postgres", cid, "pg_dump", "--version"]).strip()
+    age_version = run([AGE, "--version"]).strip()
+
+    s = Session(cid)
+    s.ask("BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY;")
+    snap = s.ask("SELECT pg_export_snapshot();")
+    if len(snap) != 1 or len(snap[0]) != 1:
+        die("could not export a snapshot")
+    snapshot = snap[0][0]
+    snapshot_utc = utc()  # the exported snapshot exists from here on; freshness is measured from it
+    tables = s.ask(
+        "SELECT format('SELECT %L, count(*) FROM %I.%I', n.nspname || '.' || c.relname, n.nspname, c.relname) "
+        "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE c.relkind = 'r' AND n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema' "
+        "ORDER BY n.nspname, c.relname \\gexec")
+    row_counts = {t: int(n) for t, n in tables}
+    if not row_counts:
+        die("no tables found")
+    sequences = {f"{a}.{b}": (int(v) if v != "" else None) for a, b, v in s.ask(
+        "SELECT schemaname, sequencename, last_value FROM pg_sequences "
+        "WHERE schemaname NOT LIKE 'pg\\_%' ORDER BY 1, 2;")}
+    migrations = None  # see the module docstring
+    if "board_meta.migration" not in row_counts:
+        die("board_meta.migration is missing: not the board database")
+
+    work = tempfile.mkdtemp(prefix="bos-board-backup.", dir=WORK_PARENT)
+    try:
+        enc_path = os.path.join(work, "dump.age")
+        dump = subprocess.Popen(
+            [DOCKER, "exec", "-e", "PGPASSWORD", "-u", "postgres", cid, "pg_dump", "--format=custom", "--no-password",
+             f"--snapshot={snapshot}", f"--lock-wait-timeout={LOCK_WAIT_TIMEOUT}",
+             "-h", SOCKET_DIR, "-U", DUMP_ROLE, "-d", DATABASE],
+            stdout=subprocess.PIPE)
+        age = subprocess.Popen([AGE, "-r", AGE_RECIPIENT, "-o", enc_path], stdin=subprocess.PIPE)
+        plain_hash, plain_bytes, head = hashlib.sha256(), 0, b""
+        while True:
+            chunk = dump.stdout.read(CHUNK)
+            if not chunk:
+                break
+            if len(head) < 5:
+                head += chunk[:5]
+            plain_hash.update(chunk)
+            plain_bytes += len(chunk)
+            age.stdin.write(chunk)
+        age.stdin.close()
+        if dump.wait() != 0:
+            die(f"pg_dump exit={dump.returncode}")
+        if age.wait() != 0:
+            die(f"age exit={age.returncode}")
+        if not head.startswith(b"PGDMP"):
+            die("pg_dump output is not a custom-format archive")
+        s.close()
+        finished = utc()
+
+        enc_hash, enc_bytes = hashlib.sha256(), 0
+        with open(enc_path, "rb") as f:
+            for chunk in iter(lambda: f.read(CHUNK), b""):
+                enc_hash.update(chunk)
+                enc_bytes += len(chunk)
+
+        meta = {
+            "format": META_FORMAT,
+            "product": PRODUCT,
+            "started_utc": started,
+            "snapshot_utc": snapshot_utc,
+            "finished_utc": finished,
+            "source": source,
+            "dump": {
+                "tool": pg_dump_version,
+                "format": "custom",
+                "role": DUMP_ROLE,
+                "snapshot": snapshot,
+                "plaintext_bytes": plain_bytes,
+                "plaintext_sha256": plain_hash.hexdigest(),
+            },
+            "encryption": {"tool": age_version, "recipient": AGE_RECIPIENT},
+            "ciphertext": {"file": "dump.age", "bytes": enc_bytes, "sha256": enc_hash.hexdigest()},
+            "row_counts": row_counts,
+            "sequences": sequences,
+            "migrations": migrations,
+        }
+        meta_path = os.path.join(work, "meta.json")
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=1, sort_keys=True)
+            f.write("\n")
+
+        with tarfile.open(fileobj=sys.stdout.buffer, mode="w|", format=tarfile.PAX_FORMAT) as tar:
+            for name in ("meta.json", "dump.age"):
+                ti = tar.gettarinfo(os.path.join(work, name), arcname=name)
+                ti.uid = ti.gid = 0
+                ti.uname = ti.gname = "root"
+                ti.mode = 0o600
+                with open(os.path.join(work, name), "rb") as f:
+                    tar.addfile(ti, f)
+        sys.stdout.buffer.flush()
+        log(f"ok sent tables={len(row_counts)} rows={sum(row_counts.values())} "
+            f"plaintext_bytes={plain_bytes} ciphertext_bytes={enc_bytes} ciphertext_sha256={enc_hash.hexdigest()}")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    main()

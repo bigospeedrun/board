@@ -1,0 +1,3 @@
+# /etc/sudoers.d/95-bosbackup (not installed yet; 0440 root). Race board backups: the
+# bosbackup login may run the dump program as root, with no arguments, and nothing else.
+bosbackup ALL=(root) NOPASSWD: /usr/local/sbin/bos-board-backup-dump ""

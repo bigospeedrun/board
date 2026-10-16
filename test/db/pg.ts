@@ -14,14 +14,15 @@ export interface TestDb {port: number; container: string; passwords: Record<Role
 
 const docker = (...args: string[]) => execFileSync('docker', args, {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).trim();
 
-export async function startDb(): Promise<TestDb> {
+// extraArgs: more `docker run` options (labels, a health check) for a test that needs them.
+export async function startDb(extraArgs: string[] = []): Promise<TestDb> {
   const name = 'bos-board-test-' + randomBytes(4).toString('hex');
   const passwords = Object.fromEntries((['board_owner', 'board_app', 'board_auth', 'board_admin', 'board_dump'] as Role[])
     .map(r => [r, randomBytes(18).toString('base64url')])) as Record<Role, string>;
   docker('run', '-d', '--rm', '--name', name, '--tmpfs', '/var/lib/postgresql:rw',
     '-e', 'POSTGRES_USER=board_owner', '-e', 'POSTGRES_DB=board', '-e', `POSTGRES_PASSWORD=${passwords.board_owner}`,
     '-e', 'POSTGRES_INITDB_ARGS=--auth-local=scram-sha-256 --auth-host=scram-sha-256',
-    '-p', '127.0.0.1::5432', PG_IMAGE);
+    '-p', '127.0.0.1::5432', ...extraArgs, PG_IMAGE);
   const stop = () => { try { docker('rm', '-f', name); } catch {} };
   try {
     const port = Number(docker('port', name, '5432/tcp').split('\n')[0].split(':').pop());

@@ -114,6 +114,24 @@ minutes, and checks that each of these fails:
 
 ## Deploy (not done yet; needs Nil's approval)
 
+The board runs on the VPS as its own compose project, `bigospeedrun-board`, apart from
+the site's `bigospeedrun` project: its own lock, deploy timer, rollback and Caddy site
+block. The step-by-step plan with its checks and rollbacks is private (the project's
+phase E plan). The files here:
+
+| File | Installed as | What |
+|---|---|---|
+| `deploy/compose.board.yml` | `/opt/bigospeedrun-board/compose.board.yml` | the services; a change is a reviewed manual copy |
+| `deploy/auto-deploy.sh` | `/opt/bigospeedrun-board/ops/auto-deploy.sh` | one deploy tick (below) |
+| `deploy/bigospeedrun-board-autodeploy.{service,timer}` | `/etc/systemd/system/` | a tick five minutes after the last one ends |
+| `deploy/bigospeedrun-board.service` | `/etc/systemd/system/` | `compose up --wait` at boot |
+| `deploy/bigospeedrun-board.tmpfiles.conf` | `/etc/tmpfiles.d/bigospeedrun-board.conf` | the two socket directories (group wg-caddy by number) |
+| `deploy/board-auto-deploy.env.example` | `/etc/bigospeedrun/board-auto-deploy.env` | image, repo and workflow names (no secrets) |
+| `deploy/board.site.caddy` | `/etc/wg-caddy/board.caddy` | the site block of `board.bigospeedrun.com` |
+| `deploy/board.caddy` | `/etc/wg-caddy/board-routes.caddy` | the routes (imported by the site block) |
+| `deploy/backup/*` | `/usr/local/sbin`, `/etc/ssh/sshd_config.d`, `/etc/sudoers.d` | the dump program and its backup login (see Backups) |
+
+Host setup, once:
 1. Create the secret files in `/etc/bigospeedrun/board/`, root-owned with mode 0440,
    each readable by one group only:
    - `owner_password`: group 999 (Postgres);
@@ -125,28 +143,36 @@ minutes, and checks that each of these fails:
    - `admin_password`: group 10004 (admin).
 
    Each value has at least 24 random characters and is written through a pipe, never
-   in argv.
-2. Create `/run/bigospeedrun-board/api` and `/run/bigospeedrun-board/auth`, each with
-   group `wg-caddy` and mode 2770, through tmpfiles.d so they survive a reboot. Each
-   service mounts only its own directory.
-3. The GitHub OAuth app exists (Nil, 2026-10-16): client id `Ov23ctm5ehCmmmzfQpL6`
+   in argv. `/etc/bigospeedrun` is 0700 root, so no other host user can reach them.
+2. The GitHub OAuth app exists (Nil, 2026-10-16): client id `Ov23ctm5ehCmmmzfQpL6`
    (a constant in `deploy/compose.board.yml`), callback
    `https://board.bigospeedrun.com/board/auth/callback`. Its client secret goes into
-   `github_client_secret` (step 1) through a pipe, never printed.
-4. Point `board.bigospeedrun.com` at the VPS in DNS. TLS for it is set up the same way
-   as for the other sites on the box (not checked here).
-5. In the compose env, set `BOARD_IMAGE` and `BOARD_SOCKET_GID` (the gid of wg-caddy).
-   `BOARD_IMAGE` is `ghcr.io/bigospeedrun/board@sha256:...`: the image workflow
-   (`.github/workflows/image.yml`) prints the digest of each build in its run summary.
-   The package must be public; the workflow warns when it is not (a maintainer sets
-   this once in the org's package settings, since `GITHUB_TOKEN` cannot). Run `docker compose up -d --wait`. Then add a
-   `board.bigospeedrun.com` site block to Caddy that imports `deploy/board.caddy`
-   (the file has the block in its header).
-6. Add the Cloudflare WAF and rate-limit rules for `board.bigospeedrun.com`.
-7. Kill switch: set `BOARD_WRITES=off` and run `docker compose up -d board-api board-auth`.
-8. Maintainers: `docker compose run --rm board-admin ban <login> <reason>`. The CLI
-   also has `revoke`, `hide` and `stats 7`.
-9. Backups: see the next section.
+   `github_client_secret` through a pipe, never printed.
+3. `/opt/bigospeedrun-board/release.env` (0600) holds
+   `BOARD_IMAGE=ghcr.io/bigospeedrun/board@sha256:...` (the digest from the image
+   workflow's run summary) and `BOARD_SOCKET_GID` (the gid of wg-caddy), and
+   `release.commit` holds that image's 40-character commit. Then
+   `docker compose -p bigospeedrun-board -f compose.board.yml --env-file release.env up -d --wait board-db board-api board-auth board-egress`.
+4. Point `board.bigospeedrun.com` at the VPS in DNS, add the Caddy site block, and add
+   the Cloudflare WAF and rate-limit rules for the host.
+
+**Deploy on push.** `deploy/auto-deploy.sh` is the site's deploy tick for this project:
+it follows the GHCR `main` tag (or `BOARD_TAG` for a rehearsal, from
+`.github/workflows/image-rehearsal.yml`), pulls a new digest, swaps with compose, checks
+both sockets, and rolls back by itself. It writes `/opt/bigospeedrun-board/auto-deploy/status.json`
+with Hosted Isomux's fields and words. Before an image that adds a migration, it writes an
+encrypted dump with the backup dump program to `/var/backups/bigospeedrun-board/pre-<commit>.tar`
+(the newest three are kept); a failed dump deploys nothing and is tried again on the next
+tick. A migration whose first line starts with `-- manual` stops the tick with
+`manual_deploy_needed` until an operator writes the image digest into
+`/opt/bigospeedrun-board/auto-deploy/manual-ok`. The hold file is
+`/etc/bigospeedrun/board-auto-deploy.hold`. `test/unit/auto-deploy.test.ts` covers the
+tick against a fake Docker and registry.
+
+**Kill switch:** add `BOARD_WRITES=off` to `release.env` and run
+`docker compose ... up -d board-api board-auth`. The deploy tick keeps the line.
+**Maintainers:** `docker compose ... run --rm board-admin ban <login> <reason>`. The CLI
+also has `revoke`, `hide` and `stats 7`.
 
 ## Image
 
@@ -173,11 +199,16 @@ What this repo provides:
   `test/db/dump.test.ts` checks the grants, the refused writes, and a real `pg_dump`.
 
 What the backup login (`bosbackup`, a VPS step outside this repo) needs:
-- **Dump program** `/usr/local/sbin/bos-board-backup-dump`, root-owned, the only command
-  of the login (sshd `ForceCommand`, `authorized_keys` with `from=`, `restrict` and
-  `command=`, and one sudoers rule with no arguments). It is a copy of the Wall Game
-  dump program with these constants: compose project `bigospeedrun`, service
-  `board-db`, database `board`, role `board_dump`, and the board's own age recipient.
+- **Dump program** `deploy/backup/bos-board-backup-dump`, installed root-owned as
+  `/usr/local/sbin/bos-board-backup-dump`, the only command of the login (sshd
+  `ForceCommand` in `deploy/backup/14-bos-backup.conf`, `authorized_keys` with `from=`,
+  `restrict` and `command=`, and the one sudoers rule with no arguments in
+  `deploy/backup/95-bosbackup`). It is a copy of the Wall Game dump program with these
+  constants: compose project `bigospeedrun-board`, service `board-db`, database
+  `board`, role `board_dump`, and the board's own age recipient. `meta.json` has
+  `"migrations": null`: the backup host's tool compares migration lists only for
+  Drizzle's table. `test/db/dump-program.test.ts` runs it on a real Postgres 18.6.
+  `deploy/backup/bosbackup-sshd-revert.sh` is the dead-man revert for the sshd change.
 - **Differences from Wall Game:** board-db trusts no login, not even on its socket.
   So every `psql` and `pg_dump` call runs as `board_dump` with
   `-h /var/run/postgresql`, and the password goes in by
