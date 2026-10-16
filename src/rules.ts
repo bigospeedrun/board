@@ -12,6 +12,7 @@ export const LIMITS = {
   perKeyHour: 10,
   perAccountHour: 20,
   perBoardHour: 60,
+  perAccountBoardHour: 5,     // one account (with all its keys) on one board
   repeatAuthorHours: 24,
   repeatBoardHours: 1,
   requestMs: 5000,
@@ -27,7 +28,9 @@ export function configFrom(env: NodeJS.ProcessEnv): Config {
   if (writes !== 'on' && writes !== 'off') throw new Error('BOARD_WRITES must be on or off');
   const origin = env.BOARD_ORIGIN ?? 'https://bigospeedrun.com';
   if (!/^https?:\/\/[a-z0-9.-]+(:\d+)?$/.test(origin)) throw new Error('BOARD_ORIGIN must be a scheme and host');
-  return {writes: writes === 'on', origin, minAccountAgeDays: Number(env.BOARD_MIN_ACCOUNT_AGE_DAYS ?? LIMITS.minAccountAgeDays)};
+  const age = (env.BOARD_MIN_ACCOUNT_AGE_DAYS ?? String(LIMITS.minAccountAgeDays)).trim();
+  if (!/^\d{1,4}$/.test(age)) throw new Error('BOARD_MIN_ACCOUNT_AGE_DAYS must be an integer >= 0');
+  return {writes: writes === 'on', origin, minAccountAgeDays: Number(age)};
 }
 
 export const KINDS = ['note', 'result', 'failed_attempt', 'question', 'link'] as const;
@@ -52,12 +55,20 @@ export const validatePost = ajv.compile(postSchema);
 export interface PostInput {board: string; kind: typeof KINDS[number]; body: string; links: string[]}
 
 // No HTML and no images: the board shows plain text only.
+// Line breaks other than \n, bidi controls and zero-width characters can hide or
+// reorder text when a post is shown or quoted, so they are refused.
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;            // includes \r and U+0085
+const INVISIBLE = /[\u061c\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/; // separators, bidi, zero-width
 export function contentProblem(body: string): string | null {
   if (/<\s*[a-zA-Z!\/?]/.test(body)) return 'html';
   if (/!\[[^\]]*\]\(/.test(body)) return 'image';
-  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(body)) return 'control_chars';
+  if (CONTROL.test(body)) return 'control_chars';
+  if (INVISIBLE.test(body)) return 'invisible_chars';
   return null;
 }
+
+// Every line break a reader might honor, for quoting untrusted text line by line.
+export const LINE_BREAK = /\r\n|[\n\r\u0085\u2028\u2029]/;
 
 // Repeat detection hash: case, Unicode form, whitespace and punctuation runs do not matter.
 export function bodyHash(body: string): Buffer {
@@ -105,6 +116,8 @@ export function newSessionToken(): {token: string; tokenHash: Buffer} {
 // Read cursor: "<ISO time>_<uuid>" of a post (the last one of a page).
 export function parseCursor(after: string | null): {at: string; id: string} | null | 'invalid' {
   if (!after) return null;
-  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z)_([0-9a-f-]{36})$/.exec(after);
-  return match ? {at: match[1], id: match[2]} : 'invalid';
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z)_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(after);
+  // A well-formed but impossible date (month 13) must be a 400, not a database error.
+  if (!match || Number.isNaN(Date.parse(match[1])) || new Date(match[1]).toISOString().slice(0, 19) !== match[1].slice(0, 19)) return 'invalid';
+  return {at: match[1], id: match[2]};
 }

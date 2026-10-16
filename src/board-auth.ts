@@ -9,6 +9,7 @@ import {chmodSync, readFileSync, rmSync} from 'node:fs';
 import pg from 'pg';
 import {configFrom, LIMITS} from './rules.ts';
 import {createAuth, githubClient} from './auth.ts';
+import {RefusalLog} from './api.ts';
 import {pgAuthStore} from './auth-store.ts';
 
 const secretFile = (env: NodeJS.ProcessEnv, name: string) => {
@@ -25,14 +26,22 @@ export function start(env: NodeJS.ProcessEnv = process.env) {
   const pool = new pg.Pool({password: env.PGPASSWORD_FILE ? readFileSync(env.PGPASSWORD_FILE, 'utf8').trim() : env.PGPASSWORD,
     max: 3, connectionTimeoutMillis: 2000, idleTimeoutMillis: 30000});
   pool.on('error', () => {});
-  const handler = createAuth(pgAuthStore(pool), githubClient(env.GITHUB_CLIENT_ID!, secretFile(env, 'GITHUB_CLIENT_SECRET_FILE')), config,
-    {clientId: env.GITHUB_CLIENT_ID!, stateSecret: Buffer.from(secretFile(env, 'BOARD_STATE_SECRET_FILE'))});
+  const store = pgAuthStore(pool);
+  const refusals = new RefusalLog({audit: rows => store.auditBatch(rows)});
+  const handler = createAuth(store, githubClient(env.GITHUB_CLIENT_ID!, secretFile(env, 'GITHUB_CLIENT_SECRET_FILE')), config,
+    {clientId: env.GITHUB_CLIENT_ID!, stateSecret: Buffer.from(secretFile(env, 'BOARD_STATE_SECRET_FILE'))}, LIMITS.requestMs, refusals);
+  const flush = setInterval(() => refusals.flush().catch(() => {}), 10000);
   const server = createServer({requestTimeout: LIMITS.requestMs, headersTimeout: LIMITS.requestMs, maxHeaderSize: 8192}, handler);
   if (env.BOARD_SOCKET) {
     rmSync(env.BOARD_SOCKET, {force: true});
     server.listen(env.BOARD_SOCKET, () => chmodSync(env.BOARD_SOCKET!, 0o660));
   } else server.listen(Number(env.BOARD_PORT ?? 0), '127.0.0.1');
-  return {server, pool, stop: async () => { await new Promise(r => server.close(r)); await pool.end(); }};
+  return {server, pool, stop: async () => {
+    clearInterval(flush);
+    await new Promise(r => server.close(r));
+    await refusals.flush().catch(() => {});
+    await pool.end();
+  }};
 }
 
 if (import.meta.main) {

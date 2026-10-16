@@ -18,8 +18,8 @@ const IMAGE = 'bigospeedrun-board:test';
 const CADDY = 'caddy:2.11@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8ca328fb7af';
 const project = 'bosboardtest' + randomBytes(3).toString('hex');
 const work = mkdtempSync(join(tmpdir(), 'bos-board-stack-'));
-const secrets = join(work, 'secrets'), sockets = join(work, 'run');
-const env = {...process.env, BOARD_IMAGE: IMAGE, BOARD_SECRETS_DIR: secrets, BOARD_SOCKET_DIR: sockets, BOARD_GITHUB_CLIENT_ID: 'Iv1.testclient00', BOARD_WRITES: 'on', BOARD_SOCKET_GID: '10001'};
+const secrets = join(work, 'secrets'), apiSockets = join(work, 'run-api'), authSockets = join(work, 'run-auth');
+const env = {...process.env, BOARD_IMAGE: IMAGE, BOARD_SECRETS_DIR: secrets, BOARD_API_SOCKET_DIR: apiSockets, BOARD_AUTH_SOCKET_DIR: authSockets, BOARD_GITHUB_CLIENT_ID: 'Iv1.testclient00', BOARD_WRITES: 'on', BOARD_SOCKET_GID: '10001'};
 const files = ['-f', join(BOARD, 'deploy/compose.board.yml'), '-f', join(work, 'test.override.yml')];
 const compose = (args: string[], extraEnv: Record<string, string> = {}) => {
   const r = spawnSync('docker', ['compose', '-p', project, ...files, ...args], {env: {...env, ...extraEnv}, encoding: 'utf8'});
@@ -32,8 +32,8 @@ let base = '', key = '';
 
 before(async () => {
   execFileSync('docker', ['build', '-q', '-f', join(BOARD, 'Dockerfile'), '-t', IMAGE, BOARD], {stdio: 'ignore'});
-  mkdirSync(secrets); mkdirSync(sockets);
-  chmodSync(sockets, 0o777); // test only; production uses group boardsock, mode 2770
+  mkdirSync(secrets); mkdirSync(apiSockets); mkdirSync(authSockets);
+  for (const dir of [apiSockets, authSockets]) chmodSync(dir, 0o777); // test only; production: group wg-caddy, mode 2770
   const owner = randomBytes(24).toString('base64url');
   for (const [name, value] of Object.entries({owner_password: owner, owner_password_node: owner, app_password: randomBytes(24).toString('base64url'),
       auth_password: randomBytes(24).toString('base64url'), admin_password: randomBytes(24).toString('base64url'),
@@ -45,7 +45,8 @@ before(async () => {
   writeFileSync(join(work, 'test.override.yml'), `services:
   board-caddy:
     image: ${CADDY}
-    user: '10001:10001'           # test only: the socket dir cannot carry wg-caddy's group here
+    user: '10001:10001'           # test only: the socket dirs cannot carry wg-caddy's group here,
+    group_add: ['10002']          # so this Caddy joins the api (10001) and auth (10002) groups
     read_only: true
     tmpfs: [/tmp, /config, /data]
     cap_drop: [ALL]
@@ -55,7 +56,8 @@ before(async () => {
     volumes:
       - ${join(work, 'Caddyfile')}:/etc/caddy/Caddyfile:ro
       - ${join(BOARD, 'deploy/board.caddy')}:/etc/caddy/board.caddy:ro
-      - ${sockets}:/run/bigospeedrun-board
+      - ${apiSockets}:/run/bigospeedrun-board/api
+      - ${authSockets}:/run/bigospeedrun-board/auth
     depends_on:
       board-api: {condition: service_healthy}
       board-auth: {condition: service_healthy}
@@ -111,9 +113,13 @@ test('item 11: an unknown field fails (400 schema)', async () => {
 });
 
 test('item 11: a cap overrun fails (429 after 10 posts per key per hour)', async () => {
+  // Rotate boards so the 5/h per account per board cap is not what refuses; the loop is
+  // bounded so a wrong cap fails the test instead of hanging it.
+  const boards = ['apsp', 'subset-sum', 'integer-multiplication', 'matrix-multiplication'];
   let accepted = 1; // the positive test posted once
-  for (let i = 0; accepted < 10; i++) if ((await post({board: 'apsp', kind: 'note', body: 'cap test ' + i})).status === 201) accepted++;
-  const r = await post({board: 'apsp', kind: 'note', body: 'one too many'});
+  for (let i = 0; accepted < 10 && i < 20; i++) if ((await post({board: boards[i % 4], kind: 'note', body: 'cap test ' + i})).status === 201) accepted++;
+  assert.equal(accepted, 10);
+  const r = await post({board: 'other-snaky', kind: 'note', body: 'one too many'});
   assert.equal(r.status, 429); assert.equal((await r.json()).error.rule, 'cap_key');
 });
 
@@ -159,8 +165,8 @@ test('item 11: DB logins need the right password; app role cannot change rows', 
 });
 
 test('item 11: containers run non-root on a read-only root fs', () => {
-  for (const service of ['board-api', 'board-auth', 'board-egress']) {
-    assert.equal(exec(service, 'id', '-u').stdout.trim(), '10001', service);
+  for (const [service, uid] of [['board-api', '10001'], ['board-auth', '10002'], ['board-egress', '10005']]) {
+    assert.equal(exec(service, 'id', '-u').stdout.trim(), uid, service);
     assert.notEqual(exec(service, 'touch', '/app/evil').status, 0, service);
   }
   assert.equal(exec('board-db', 'id', '-u').stdout.trim(), '999');

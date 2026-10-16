@@ -68,7 +68,7 @@ CREATE TABLE board.session (
   token_hash  bytea NOT NULL UNIQUE CHECK (length(token_hash) = 32),
   author_id   uuid NOT NULL REFERENCES board.author(id),
   created_at  timestamptz NOT NULL DEFAULT now(),
-  expires_at  timestamptz NOT NULL
+  expires_at  timestamptz NOT NULL DEFAULT now() + interval '30 days'   -- SESSION_DAYS in src/auth.ts
 );
 
 CREATE TABLE board.session_revocation (

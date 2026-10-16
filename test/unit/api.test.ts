@@ -107,15 +107,17 @@ test('credentials: bad key 401, none 401, cross-origin cookie 403, young account
 });
 
 test('store refusals map to 429 caps, 409 repeat and 404 unknown board, and are audited per actor', async () => {
-  const s = await serve();
+  // A fresh server per rule: a cap refusal blocks the key in the gate for a minute.
+  const audits: any[] = [];
   for (const [rule, status] of [['cap_key', 429], ['cap_account', 429], ['cap_board', 429], ['repeat', 409], ['unknown_board', 404]] as const) {
+    const s = await serve();
     s.setNext({ok: false, rule});
     const r = await s.call('POST', '/board/api/posts', s.ok, s.auth);
     assert.equal(r.status, status); assert.equal(r.json.error.rule, rule);
+    await s.refusals.flush(); audits.push(...s.audits);
   }
-  await s.refusals.flush();
-  assert.deepEqual(s.audits.map(a => a.rule), ['cap_key', 'cap_account', 'cap_board', 'repeat', 'unknown_board']);
-  assert.ok(s.audits.every(a => a.actor === 'key:' + key.prefix));
+  assert.deepEqual(audits.map(a => a.rule), ['cap_key', 'cap_account', 'cap_board', 'repeat', 'unknown_board']);
+  assert.ok(audits.every(a => a.actor === 'key:' + key.prefix));
 });
 
 test('read: JSON list, Markdown feed quotes untrusted text, bad queries 400, unknown board 404', async () => {
@@ -143,4 +145,41 @@ test('markdown feed names an agent by its owner', () => {
   const md = markdownFeed('x', [{id: 'i', board: 'x', kind: 'result', body: 'b', links: [], createdAt: 't', cursor: 'c',
     author: {name: 'bot', kind: 'agent_key', githubLogin: null, ownerGithubLogin: 'alice'}}]);
   assert.match(md, /bot \(agent of @alice\)/);
+});
+
+test('review fixes: a capped key is refused before the store (no pooled client, no lock)', async () => {
+  const {CapGate} = await import('../../src/api.ts');
+  let calls = 0;
+  const s = await serve({}, {async createPost() { calls++; return {ok: true, id: 'p' + calls}; }});
+  for (let i = 0; i < 10; i++) assert.equal((await s.call('POST', '/board/api/posts', JSON.stringify({board: '3sum', kind: 'note', body: 'n' + i}), s.auth)).status, 201);
+  const r = await s.call('POST', '/board/api/posts', s.ok, s.auth);
+  assert.equal(r.status, 429); assert.equal(r.json.error.rule, 'cap_key'); assert.equal(calls, 10);
+  // After the database refuses a cap, the gate blocks that key for a minute.
+  let t = 0;
+  const gate = new CapGate(() => t);
+  const actor = {authorId: 'a', keyId: 'k', accountId: 'o', label: 'key:x'};
+  gate.refused(actor, 'cap_key');
+  assert.equal(gate.refuse(actor), 'cap_key');
+  t = 61_000; assert.equal(gate.refuse(actor), null);
+});
+
+test('review fixes: per account per board cap, no unknown slug as audit target, Vary: Accept', async () => {
+  const s = await serve();
+  s.setNext({ok: false, rule: 'cap_account_board'});
+  assert.equal((await s.call('POST', '/board/api/posts', s.ok, s.auth)).status, 429);
+  s.setNext({ok: false, rule: 'unknown_board'});
+  await s.call('POST', '/board/api/posts', JSON.stringify({board: 'made-up-board', kind: 'note', body: 'x'}), s.auth);
+  await s.refusals.flush();
+  assert.deepEqual(s.audits.map(a => [a.rule, a.target]), [['cap_account_board', '3sum'], ['unknown_board', null]]);
+  const got = await new Promise<string | undefined>(resolve => {
+    const server = servers.at(-1)!;
+    request({host: '127.0.0.1', port: (server.address() as any).port, path: '/board/api/posts?board=3sum'}, res => { resolve(res.headers.vary); res.resume(); }).end();
+  });
+  assert.equal(got, 'Accept');
+});
+
+test('review fixes: feed quoting splits on every line break', () => {
+  const md = markdownFeed('x', [{id: 'i', board: 'x', kind: 'note', body: 'one ## fake heading\rthree\u0085four', links: [], createdAt: 't', cursor: 'c',
+    author: {name: 'p', kind: 'github', githubLogin: 'p', ownerGithubLogin: null}}]);
+  assert.match(md, /\n> one\n> ## fake heading\n> three\n> four\n/);
 });

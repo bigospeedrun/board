@@ -1,7 +1,8 @@
 # Race board routes for the bigospeedrun.com site block (phase E; not deployed).
 # Import inside the site block: `import /etc/caddy/sites/board.caddy`.
 # Only the three public endpoints pass; everything else under /board/ is 404.
-# Caddy reaches the services through unix sockets in /run/bigospeedrun-board (group wg-caddy).
+# Caddy reaches the services through unix sockets in /run/bigospeedrun-board/{api,auth}
+# (group wg-caddy). Body caps match the apps: 8 KiB = 8192 bytes, 2 KiB = 2048 bytes.
 handle /board/* {
 	@post_api {
 		method POST
@@ -10,9 +11,9 @@ handle /board/* {
 	}
 	handle @post_api {
 		request_body {
-			max_size 8KB
+			max_size 8KiB
 		}
-		reverse_proxy unix//run/bigospeedrun-board/api.sock {
+		reverse_proxy unix//run/bigospeedrun-board/api/api.sock {
 			header_up X-Forwarded-For {client_ip}
 		}
 	}
@@ -22,7 +23,7 @@ handle /board/* {
 		path /board/api/posts
 	}
 	handle @read_api {
-		reverse_proxy unix//run/bigospeedrun-board/api.sock
+		reverse_proxy unix//run/bigospeedrun-board/api/api.sock
 	}
 
 	@auth_get {
@@ -30,7 +31,7 @@ handle /board/* {
 		path /board/auth/login /board/auth/callback /board/auth/account /board/auth/
 	}
 	handle @auth_get {
-		reverse_proxy unix//run/bigospeedrun-board/auth.sock
+		reverse_proxy unix//run/bigospeedrun-board/auth/auth.sock
 	}
 
 	@auth_post {
@@ -39,9 +40,9 @@ handle /board/* {
 	}
 	handle @auth_post {
 		request_body {
-			max_size 2KB
+			max_size 2KiB
 		}
-		reverse_proxy unix//run/bigospeedrun-board/auth.sock
+		reverse_proxy unix//run/bigospeedrun-board/auth/auth.sock
 	}
 
 	handle {

@@ -16,14 +16,14 @@ here (see Tests).
 |---|---|
 | Endpoints | Three only: `POST /board/api/posts`, `GET /board/api/posts`, and `/board/auth/*` (GitHub sign-in, then key mint or revoke). Caddy and the apps return 404 for every other path and method |
 | Edge | Cloudflare WAF and rate-limit rules for `/board/*` (set up on deploy; not testable locally) |
-| Caddy | `deploy/board.caddy`: path and method matchers, a JSON content-type match on posts, body caps of 8 KiB (posts) and 2 KiB (auth), unix sockets to the services |
+| Caddy | `deploy/board.caddy`: path and method matchers, a JSON content-type match on posts, body caps of 8 KiB (posts) and 2 KiB (auth), a unix socket per service in its own directory |
 | board-api | `network_mode: none`. It reaches Caddy and Postgres through unix sockets only and makes no outbound calls |
-| board-auth | Its only network is an internal one to `board-egress`, an allowlist proxy that opens CONNECT tunnels to `github.com:443` and `api.github.com:443` only (vendored from the site, see `src/vendor/`) |
+| board-auth | Its only network is an internal one to `board-egress`, an allowlist proxy that opens CONNECT tunnels to `github.com:443` and `api.github.com:443` only (vendored from the site at cb1123e: public addresses only, the checked address is dialed, at most 32 tunnels, 30 s idle, 90 s lifetime) |
 | board-db | Postgres 18.6 in its own container and volume: `network_mode: none`, unix socket only, scram-sha-256 for every login (the image trusts local logins by default), 2 s `statement_timeout` |
-| DB roles | `board_app`, `board_auth` and `board_admin` have INSERT and SELECT only. The schema is append-only: a ban, a hide or a revoke is a new row, and the reads join against them |
-| Containers | Read-only root fs, `tmpfs /tmp`, non-root (uid 10001; Postgres uid 999), `cap_drop: ALL`, `no-new-privileges`, CPU, memory (swap off) and pid limits |
-| App | Strict JSON Schema (`additionalProperties: false`, length caps), plain text only (no HTML or images), a 5 s deadline per request, caps of 10 posts/h per key, 20 per account and 60 per board, repeat-text refusal, and the `BOARD_WRITES=off` kill switch |
-| Observability | `audit_log` gets every accepted post, every action and every refusal (refusals counted per minute, actor and rule). No agent reads posts; alarms are dead-man incidents only |
+| DB roles | `board_app`, `board_auth` and `board_admin` have SELECT, and INSERT on named columns only, so ids, `created_at` and session expiry always keep their defaults. The schema is append-only: a ban, a hide or a revoke is a new row, and the reads join against them. Role passwords reach Postgres only as SCRAM verifiers |
+| Containers | Read-only root fs, `tmpfs /tmp`, a separate non-root uid per service (api 10001, auth 10002, migrate 10003, admin 10004, egress 10005; Postgres 999), `cap_drop: ALL`, `no-new-privileges`, CPU, memory (swap off) and pid limits on every service |
+| App | Strict JSON Schema (`additionalProperties: false`, length caps), plain text only (no HTML, images, control, bidi or zero-width characters), a 5 s deadline per request, caps of 10 posts/h per key, 20 per account, 5 per account on one board and 60 per board (an in-memory pre-check refuses a capped key before it takes a database client), repeat-text refusal, separate read and write pools, and the `BOARD_WRITES=off` kill switch (it also stops sign-in) |
+| Observability | `audit_log` gets every accepted post, every action and every refusal; refusals from both services are counted per minute, actor and rule, never one row per request. No agent reads posts; alarms are dead-man incidents only |
 
 ## API
 
@@ -46,7 +46,12 @@ here (see Tests).
   - `GET account` is a minimal page with your keys.
   - `POST keys` creates a key, which is shown once. It needs a GitHub account at least
     30 days old. Each account can have at most 5 active keys and create at most 10 new
-    keys per day.
+    keys per day; both caps are checked in one transaction under a per-owner lock.
+  - The callback answers a 200 page on our origin that refreshes to the account page.
+    The navigation that reaches the callback started on github.com, so a redirect would
+    still be cross-site and the browser would not send the new session cookie. The
+    refresh is a same-site navigation, so the cookie can stay `SameSite=Strict`. The
+    OAuth state carries its issue time in the MAC and is valid for 10 minutes.
   - `POST keys/revoke` revokes a key, and `POST logout` signs out.
 
 Boards: one per public race, from the site's public data
@@ -62,7 +67,7 @@ for new races. It never removes a board.
 | `src/board-auth.ts`, `src/auth.ts`, `src/auth-store.ts` | board-auth server, handler, Postgres store |
 | `src/rules.ts` | limits, the post schema, key and cookie formats, repeat hash |
 | `src/admin.ts` | maintainer CLI: `ban`, `revoke`, `hide`, `stats` (run on the box only, no network) |
-| `src/vendor/egress-proxy.mjs` | the project's allowlist proxy, copied from bigospeedrun/site at 8a0ffdc |
+| `src/vendor/egress-proxy.mjs` | the project's allowlist proxy, copied from bigospeedrun/site at cb1123e |
 | `db/migrate.ts`, `db/migrations/` | forward-only migrations and role passwords |
 | `deploy/compose.board.yml`, `deploy/board.caddy`, `Dockerfile` | containers, Caddy routes, image |
 | `docs/queries.md` | every query, its index and its plan on 1M posts; edge caching of feeds |
@@ -89,15 +94,19 @@ minutes, and checks that each of these fails:
 
 ## Deploy (not done yet; needs Nil's approval)
 
-1. Create the secret files in `/etc/bigospeedrun/board/`, root-owned with mode 0440:
-   - `owner_password` with group 999;
-   - `owner_password_node` (the same value), `app_password`, `auth_password`,
-     `admin_password`, `github_client_secret` and `state_secret`, with group 10001.
+1. Create the secret files in `/etc/bigospeedrun/board/`, root-owned with mode 0440,
+   each readable by one group only:
+   - `owner_password`: group 999 (Postgres);
+   - `app_password`: group 10001 (board-api);
+   - `auth_password`, `github_client_secret` and `state_secret`: group 10002 (board-auth);
+   - `owner_password_node` (the same value as `owner_password`): group 10003 (migrate);
+   - `admin_password`: group 10004 (admin).
 
    Each value has at least 24 random characters and is written through a pipe, never
    in argv.
-2. Create `/run/bigospeedrun-board` with group `wg-caddy` and mode 2770, through
-   tmpfiles.d so it survives a reboot.
+2. Create `/run/bigospeedrun-board/api` and `/run/bigospeedrun-board/auth`, each with
+   group `wg-caddy` and mode 2770, through tmpfiles.d so they survive a reboot. Each
+   service mounts only its own directory.
 3. Register a GitHub OAuth app (Nil), with the callback
    `https://bigospeedrun.com/board/auth/callback`.
 4. In the compose env, set `BOARD_IMAGE` (a CI-built digest), `BOARD_GITHUB_CLIENT_ID`
@@ -131,8 +140,8 @@ The site copy is Nil's, so the wording here is a placeholder for him to choose.
   migration.
 - A GitHub login rename keeps the first login on the board, because author rows are
   append-only.
-- The egress proxy does not refuse an allowed name that resolves to a private address.
-  This is suggested upstream, in the site's `ops/self-host/egress-proxy.mjs`.
+- The egress proxy is a copy of the site's `ops/self-host/egress-proxy.mjs` (commit
+  cb1123e). Changes go upstream first, then the copy here is refreshed.
 
 ## License
 

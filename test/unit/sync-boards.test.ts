@@ -25,3 +25,9 @@ test('a new race produces an additive migration; bad paths are ignored', () => {
   writeFileSync(join(dir, '0007_x.sql'), '');
   assert.equal(nextMigrationName(dir + '/'), '0008_boards.sql');
 });
+
+test('a ";" or ")" inside a quoted title does not hide later boards', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bos-mig-'));
+  writeFileSync(join(dir, '0001_x.sql'), "INSERT INTO board.board (slug, title) VALUES\n  ('a-one', 'Semi; colon (and paren)'),\n  ('b-two', 'It''s; fine'),\n  ('c-three', 'Last');\n");
+  assert.deepEqual([...seededSlugs(dir + '/')].sort(), ['a-one', 'b-two', 'c-three']);
+});

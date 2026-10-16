@@ -12,9 +12,12 @@ import {pgStore} from './store.ts';
 export function start(env: NodeJS.ProcessEnv = process.env) {
   const config = configFrom(env);
   const password = env.PGPASSWORD_FILE ? readFileSync(env.PGPASSWORD_FILE, 'utf8').trim() : env.PGPASSWORD;
-  const pool = new pg.Pool({password, max: 5, connectionTimeoutMillis: 2000, idleTimeoutMillis: 30000});
-  pool.on('error', () => {}); // A dropped idle connection must not end the process.
-  const store = pgStore(pool);
+  // Separate read and write pools: posts waiting on advisory locks cannot take the
+  // clients that feeds and key lookups need.
+  const options = {password, connectionTimeoutMillis: 2000, idleTimeoutMillis: 30000};
+  const write = new pg.Pool({...options, max: 3}), read = new pg.Pool({...options, max: 4});
+  for (const p of [write, read]) p.on('error', () => {}); // A dropped idle connection must not end the process.
+  const store = pgStore(write, read);
   const refusals = new RefusalLog(store);
   const server = createServer({requestTimeout: LIMITS.requestMs, headersTimeout: LIMITS.requestMs, maxHeaderSize: 8192},
     createApi(store, config, refusals));
@@ -28,9 +31,9 @@ export function start(env: NodeJS.ProcessEnv = process.env) {
     clearInterval(flush);
     await new Promise(r => server.close(r));
     await refusals.flush().catch(() => {});
-    await pool.end();
+    await Promise.all([write.end(), read.end()]);
   };
-  return {server, pool, refusals, stop};
+  return {server, pools: [write, read], refusals, stop};
 }
 
 if (import.meta.main) {

@@ -48,6 +48,22 @@ test('board_app: SELECT and INSERT post only; no UPDATE, DELETE, TRUNCATE, DDL, 
   await app.end();
 });
 
+test('review fixes: INSERT is granted per column, so ids and times keep their defaults', async () => {
+  const auth = await db.client('board_auth');
+  const author = await person(auth);
+  await denied(auth, `INSERT INTO board.session (token_hash, author_id, expires_at) VALUES ($1, $2, now() + interval '10 years')`, [hash(), author]);
+  await denied(auth, `INSERT INTO board.author (id, kind, github_id, github_login, display_name) VALUES (gen_random_uuid(), 'github', 5, 'x', 'x')`);
+  await denied(auth, `INSERT INTO board.audit_log (at, action) VALUES (now() - interval '1 year', 'x')`);
+  await auth.end();
+  const app = await db.client('board_app');
+  await denied(app, `INSERT INTO board.post (board_slug, author_id, kind, body, body_hash, created_at) VALUES ('3sum', $1, 'note', 'x', $2, now() - interval '2 hours')`, [author, hash()]);
+  await denied(app, `INSERT INTO board.post (id, board_slug, author_id, kind, body, body_hash) VALUES (gen_random_uuid(), '3sum', $1, 'note', 'x', $2)`, [author, hash()]);
+  await app.end();
+  const admin = await db.client('board_admin');
+  await denied(admin, `INSERT INTO board.ban (author_id, by_actor, reason, at) VALUES ($1, 'x', 'x', now() - interval '1 day')`, [author]);
+  await admin.end();
+});
+
 test('board_auth: writes accounts, keys and sessions, never posts or bans', async () => {
   const auth = await db.client('board_auth');
   const author = await person(auth);

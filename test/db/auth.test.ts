@@ -24,14 +24,13 @@ test('sign in, session, mint, post, revoke, end session, ban', async () => {
   assert.equal(first.banned, false);
 
   const {tokenHash} = newSessionToken();
-  await auth.createSession(first.authorId, tokenHash, 30);
+  await auth.createSession(first.authorId, tokenHash);
   const session = (await auth.session(tokenHash))!;
   assert.equal(session.login, 'alice');
   assert.equal((await api.sessionByHash(tokenHash))!.authorId, first.authorId);
 
   const key = mintKey();
-  await auth.addKey(first.authorId, 'my agent', key.prefix, key.secretHash);
-  assert.deepEqual(await auth.mintCounts(first.authorId), {active: 1, today: 1});
+  assert.equal(await auth.createKey(first.authorId, 'my agent', key.prefix, key.secretHash, 5, 10), 'ok');
   const found = (await api.keyByPrefix(key.prefix))!;
   assert.ok(secretMatches(key.key.slice('bos_'.length + 12 + 1), found.secretHash)); // the secret itself can contain '_'
   const actor = {authorId: found.authorId, keyId: found.keyId, accountId: found.ownerId, label: 'key:' + key.prefix};
@@ -54,7 +53,27 @@ test('sign in, session, mint, post, revoke, end session, ban', async () => {
   await admin.end();
   assert.equal((await auth.signIn(user)).banned, true);
   const fresh = newSessionToken();
-  await auth.createSession(first.authorId, fresh.tokenHash, 30);
+  await auth.createSession(first.authorId, fresh.tokenHash);
   assert.equal(await auth.session(fresh.tokenHash), null);
   assert.equal((await api.listPosts('3sum', {}, 10))!.length, 0);
+});
+
+test('review fixes: concurrent mints by one owner cannot pass the key caps together', async () => {
+  const auth = pgAuthStore(authPool);
+  const {authorId} = await auth.signIn({id: 9100, login: 'minter', name: 'Minter', created_at: '2019-01-01T00:00:00Z'});
+  const results = await Promise.all(Array.from({length: 8}, () => { const k = mintKey(); return auth.createKey(authorId, 'k', k.prefix, k.secretHash, 5, 10); }));
+  assert.equal(results.filter(r => r === 'ok').length, 5);
+  assert.equal(results.filter(r => r === 'cap_keys_active').length, 3);
+});
+
+test('review fixes: sessions expire by the 30-day DB default; display names are sanitized', async () => {
+  const auth = pgAuthStore(authPool);
+  const {authorId} = await auth.signIn({id: 9200, login: 'bidi-user', name: 'evil\u202ename', created_at: '2019-01-01T00:00:00Z'});
+  const {tokenHash} = newSessionToken();
+  await auth.createSession(authorId, tokenHash);
+  const owner = await db.client('board_owner');
+  const row = (await owner.query(`SELECT (expires_at - created_at) = interval '30 days' AS thirty FROM board.session WHERE token_hash = $1`, [tokenHash])).rows[0];
+  assert.equal(row.thirty, true);
+  assert.equal((await owner.query('SELECT display_name FROM board.author WHERE id = $1', [authorId])).rows[0].display_name, 'bidi-user');
+  await owner.end();
 });

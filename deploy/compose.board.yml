@@ -5,14 +5,17 @@
 #   board-migrate  one-off: migrations + role passwords (owner role), no network
 #   board-api      POST/GET /board/api/posts, NO network: unix sockets only
 #   board-auth     /board/auth/*, network only to board-egress
-#   board-egress   allowlist proxy (vendored from the site, 8a0ffdc): CONNECT github.com:443, api.github.com:443
+#   board-egress   allowlist proxy (vendored from the site, cb1123e): CONNECT github.com:443, api.github.com:443
 #   board-admin    one-off maintainer CLI (ban, revoke, hide, stats), no network
 #
-# Aligned with ~/nil/self-host-playbook.md, "Boxed public write surface". Host setup:
-# /etc/bigospeedrun/board/ holds the secret files, root-owned, mode 0440, group 999
-# (postgres) for owner_password and group 10001 for the rest; /run/bigospeedrun-board
-# is a directory owned by Caddy's group (wg-caddy, gid in BOARD_SOCKET_GID) with mode
-# 2770, so Caddy reaches the two sockets and nothing else does.
+# Follows the self-host playbook's "Boxed public write surface". Each service has its own
+# uid (api 10001, auth 10002, migrate 10003, admin 10004, egress 10005). Host setup:
+# /etc/bigospeedrun/board/ holds the secret files, root-owned, mode 0440, each readable
+# by one group only: owner_password 999 (postgres), app_password 10001, auth_password,
+# github_client_secret and state_secret 10002, owner_password_node 10003 and
+# admin_password 10004. /run/bigospeedrun-board/api and /run/bigospeedrun-board/auth are
+# two directories owned by Caddy's group (wg-caddy, gid in BOARD_SOCKET_GID), mode 2770:
+# Caddy reaches both sockets, and each service sees only its own directory.
 x-hardening: &hardening
   read_only: true
   tmpfs: ['/tmp:size=16m,mode=1777']
@@ -24,7 +27,6 @@ x-hardening: &hardening
 x-board: &board
   <<: *hardening
   image: ${BOARD_IMAGE:?set BOARD_IMAGE to bigospeedrun-board@sha256:...}
-  user: '10001:10001'
   group_add: ['${BOARD_SOCKET_GID:?set BOARD_SOCKET_GID to the gid of wg-caddy}']
   cpus: 0.25
   mem_limit: 256m
@@ -73,9 +75,13 @@ services:
   board-migrate:
     <<: *hardening
     image: ${BOARD_IMAGE}
-    user: '10001:10001'
+    user: '10003:10003'
     network_mode: none
     restart: 'no'
+    cpus: 0.25
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 32
     command: [node, --experimental-strip-types, db/migrate.ts]
     environment:
       PGHOST: /var/run/postgresql
@@ -96,32 +102,34 @@ services:
 
   board-api:
     <<: *board
+    user: '10001:10001'
     network_mode: none            # no route anywhere: Caddy and Postgres via unix sockets
     command: [node, --experimental-strip-types, src/board-api.ts]
     environment:
       <<: *board-env
       PGUSER: board_app
       PGPASSWORD_FILE: /run/secrets/app_password
-      BOARD_SOCKET: /run/board/api.sock
+      BOARD_SOCKET: /run/board-api/api.sock
     healthcheck:
-      test: [CMD, node, -e, "require('http').get({socketPath:'/run/board/api.sock',path:'/board/api/posts?board=3sum&limit=1'},r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      test: [CMD, node, -e, "require('http').get({socketPath:'/run/board-api/api.sock',path:'/board/api/posts?board=3sum&limit=1'},r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
       interval: 15s
       timeout: 3s
       retries: 5
     volumes:
       - board-db-socket:/var/run/postgresql
-      - ${BOARD_SOCKET_DIR:-/run/bigospeedrun-board}:/run/board
+      - ${BOARD_API_SOCKET_DIR:-/run/bigospeedrun-board/api}:/run/board-api
       - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/app_password:/run/secrets/app_password:ro
 
   board-auth:
     <<: *board
+    user: '10002:10002'
     networks: [board-egress-internal]   # internal network: its only peer is board-egress
     command: [node, --experimental-strip-types, src/board-auth.ts]
     environment:
       <<: *board-env
       PGUSER: board_auth
       PGPASSWORD_FILE: /run/secrets/auth_password
-      BOARD_SOCKET: /run/board/auth.sock
+      BOARD_SOCKET: /run/board-auth/auth.sock
       GITHUB_CLIENT_ID: ${BOARD_GITHUB_CLIENT_ID:?set BOARD_GITHUB_CLIENT_ID}
       GITHUB_CLIENT_SECRET_FILE: /run/secrets/github_client_secret
       BOARD_STATE_SECRET_FILE: /run/secrets/state_secret
@@ -130,13 +138,13 @@ services:
       HTTP_PROXY: http://board-egress:3128
       NO_PROXY: ''
     healthcheck:
-      test: [CMD, node, -e, "require('http').get({socketPath:'/run/board/auth.sock',path:'/board/auth/account'},r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      test: [CMD, node, -e, "require('http').get({socketPath:'/run/board-auth/auth.sock',path:'/board/auth/account'},r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
       interval: 15s
       timeout: 3s
       retries: 5
     volumes:
       - board-db-socket:/var/run/postgresql
-      - ${BOARD_SOCKET_DIR:-/run/bigospeedrun-board}:/run/board
+      - ${BOARD_AUTH_SOCKET_DIR:-/run/bigospeedrun-board/auth}:/run/board-auth
       - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/auth_password:/run/secrets/auth_password:ro
       - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/github_client_secret:/run/secrets/github_client_secret:ro
       - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/state_secret:/run/secrets/state_secret:ro
@@ -148,7 +156,7 @@ services:
   board-egress:
     <<: *hardening
     image: ${BOARD_IMAGE}
-    user: '10001:10001'
+    user: '10005:10005'
     cpus: 0.1
     mem_limit: 96m
     memswap_limit: 96m
@@ -162,9 +170,13 @@ services:
   board-admin:
     <<: *hardening
     image: ${BOARD_IMAGE}
-    user: '10001:10001'
+    user: '10004:10004'
     network_mode: none
     restart: 'no'
+    cpus: 0.25
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 32
     profiles: [admin]             # never started by `up`; run with `compose run --rm board-admin ...`
     entrypoint: [node, --experimental-strip-types, src/admin.ts]
     environment:

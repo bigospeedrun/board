@@ -1,4 +1,4 @@
-# Race board image (phase E of ~/nil/bigospeedrun-notes/self-host-scope.md). One image,
+# Race board image. One image,
 # four commands: board-api, board-auth, board-egress (allowlist proxy), and the one-off
 # migrate and admin jobs. Vercel and the site image do not use this file.
 # Build from the repository root: docker build -f board/Dockerfile -t bigospeedrun-board board

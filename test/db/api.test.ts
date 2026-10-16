@@ -31,38 +31,51 @@ async function agentKey(owner: string): Promise<Actor> {
 }
 const post = (actor: Actor, board: string, body: string) => store.createPost(actor, {board, kind: 'note', body, links: []}, bodyHash(body));
 const uniq = () => 'post ' + randomBytes(6).toString('hex');
+// Spread posts over boards so the 5/h per account per board cap does not apply.
+const BOARDS = ['3sum', 'apsp', 'subset-sum', 'integer-multiplication', 'exact-dft', 'matrix-multiplication', 'other-snaky', 'other-catalan'];
+const board = (i: number) => BOARDS[i % BOARDS.length];
 
 test('per key cap: 10 posts per hour, then cap_key', async () => {
   const actor = await agentKey(await person());
-  for (let i = 0; i < LIMITS.perKeyHour; i++) assert.equal((await post(actor, '3sum', uniq())).ok, true);
-  assert.deepEqual(await post(actor, '3sum', uniq()), {ok: false, rule: 'cap_key'});
+  for (let i = 0; i < LIMITS.perKeyHour; i++) assert.equal((await post(actor, board(i), uniq())).ok, true);
+  assert.deepEqual(await post(actor, board(10), uniq()), {ok: false, rule: 'cap_key'});
 });
 
 test('per account cap: 20 posts per hour across the account and its keys', async () => {
   const owner = await person();
   const [a, b] = [await agentKey(owner), await agentKey(owner)];
   const self: Actor = {authorId: owner, keyId: null, accountId: owner, label: 'author:' + owner};
-  for (let i = 0; i < 10; i++) assert.equal((await post(a, 'apsp', uniq())).ok, true);
-  for (let i = 0; i < 9; i++) assert.equal((await post(b, 'apsp', uniq())).ok, true);
-  assert.equal((await post(self, 'apsp', uniq())).ok, true);
-  assert.deepEqual(await post(b, 'apsp', uniq()), {ok: false, rule: 'cap_account'});
+  for (let i = 0; i < 10; i++) assert.equal((await post(a, board(i), uniq())).ok, true);
+  for (let i = 0; i < 9; i++) assert.equal((await post(b, board(i + 3), uniq())).ok, true);
+  assert.equal((await post(self, board(5), uniq())).ok, true);
+  assert.deepEqual(await post(b, board(6), uniq()), {ok: false, rule: 'cap_account'});
 });
 
-test('per board cap: 60 posts per hour from many accounts', async () => {
-  for (let i = 0; i < 6; i++) {
+test('per board cap: 60 posts per hour from many accounts (a board no other test uses)', async () => {
+  for (let i = 0; i < 12; i++) {
     const actor = await agentKey(await person());
-    for (let j = 0; j < 10; j++) assert.equal((await post(actor, 'subset-sum', uniq())).ok, true);
+    for (let j = 0; j < 5; j++) assert.equal((await post(actor, 'other-heilbronn-triangle', uniq())).ok, true);
   }
   const late = await agentKey(await person());
-  assert.deepEqual(await post(late, 'subset-sum', uniq()), {ok: false, rule: 'cap_board'});
+  assert.deepEqual(await post(late, 'other-heilbronn-triangle', uniq()), {ok: false, rule: 'cap_board'});
   assert.equal((await post(late, 'exact-dft', uniq())).ok, true);
 });
 
 test('concurrent posts with one key cannot pass the cap together', async () => {
   const actor = await agentKey(await person());
-  const results = await Promise.all(Array.from({length: 15}, () => post(actor, 'other-heilbronn-triangle', uniq())));
+  const results = await Promise.all(Array.from({length: 15}, (_, i) => post(actor, board(i), uniq())));
   assert.equal(results.filter(r => r.ok).length, 10);
   assert.equal(results.filter(r => !r.ok && r.rule === 'cap_key').length, 5);
+});
+
+test('per account per board cap: 5 posts per hour on one board across all keys', async () => {
+  const owner = await person();
+  const [a, b] = [await agentKey(owner), await agentKey(owner)];
+  for (let i = 0; i < 3; i++) assert.equal((await post(a, 'other-haldane-gap', uniq())).ok, true);
+  for (let i = 0; i < 2; i++) assert.equal((await post(b, 'other-haldane-gap', uniq())).ok, true);
+  assert.deepEqual(await post(a, 'other-haldane-gap', uniq()), {ok: false, rule: 'cap_account_board'});
+  assert.deepEqual(await post(b, 'other-haldane-gap', uniq()), {ok: false, rule: 'cap_account_board'});
+  assert.equal((await post(b, 'other-sidorenko', uniq())).ok, true);
 });
 
 test('repeat: same author within 24 h, or any author on the board within 1 h', async () => {
@@ -89,29 +102,30 @@ test('unknown board is refused; accepted posts are audited', async () => {
 
 test('read: newest first with before=, oldest first with after=, no repeats; hidden and banned posts disappear', async () => {
   const owner = await person();
-  const actor = await agentKey(owner);
+  const actor = await agentKey(owner), other = await agentKey(await person());
   const ids: string[] = [];
-  for (let i = 0; i < 7; i++) ids.push(((await post(actor, 'other-catalan', uniq())) as any).id);
+  // Two accounts alternate (4 + 3 posts), within the 5/h per account per board cap.
+  for (let i = 0; i < 7; i++) ids.push(((await post(i % 2 ? other : actor, 'other-ordered-matrix-removal', uniq())) as any).id);
   const cursorOf = (p: PostRow): Cursor => ({at: p.cursor.slice(0, p.cursor.lastIndexOf('_')), id: p.id});
   const walk = async (dir: 'after' | 'before', start: Cursor | undefined) => {
     const seen: string[] = [];
     let cursor = start;
     for (;;) {
-      const page: PostRow[] = (await store.listPosts('other-catalan', cursor ? {[dir]: cursor} : {}, 3))!;
+      const page: PostRow[] = (await store.listPosts('other-ordered-matrix-removal', cursor ? {[dir]: cursor} : {}, 3))!;
       seen.push(...page.map(p => p.id));
       if (page.length < 3) return seen;
       cursor = cursorOf(page.at(-1)!);
     }
   };
   assert.deepEqual(await walk('before', undefined), [...ids].reverse());
-  const first = (await store.listPosts('other-catalan', {before: undefined}, 50))!.at(-1)!;
+  const first = (await store.listPosts('other-ordered-matrix-removal', {before: undefined}, 50))!.at(-1)!;
   assert.deepEqual(await walk('after', cursorOf(first)), ids.slice(1));
   assert.equal((await store.listPosts('nope', {}, 5)), null);
   const admin = await db.client('board_admin');
   await admin.query(`INSERT INTO board.hidden (post_id, by_actor, reason) VALUES ($1, 'nil', 'spam')`, [ids[0]]);
-  assert.equal((await store.listPosts('other-catalan', {}, 50))!.length, 6);
+  assert.equal((await store.listPosts('other-ordered-matrix-removal', {}, 50))!.length, 6);
   await admin.query(`INSERT INTO board.ban (author_id, by_actor, reason) VALUES ($1, 'nil', 'spam')`, [owner]);
-  assert.equal((await store.listPosts('other-catalan', {}, 50))!.length, 0);
+  assert.equal((await store.listPosts('other-ordered-matrix-removal', {}, 50))!.length, 3); // the other account's posts stay
   assert.equal(await store.keyByPrefix(actor.label.slice(4)), null);
   await admin.end();
 });

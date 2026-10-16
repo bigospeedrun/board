@@ -32,8 +32,8 @@ try {
   await explain(app, 'Key lookup (every agent POST)', SQL.keyByPrefix, [s.keyPrefix]);
   await explain(app, 'Session lookup (every person POST)', SQL.sessionByHash, [s.sessionHash]);
   await explain(app, 'Board exists (every POST and GET)', SQL.boardExists, [s.hotBoard]);
-  await explain(app, 'Caps and repeat check, hot board with 51k posts in the last hour (every POST)', SQL.capsAndRepeat, [s.keyId, s.accountId, s.hotBoard, s.bodyHash, s.agentId, 24, 1, 10, 20, 60]);
-  await explain(app, 'Caps and repeat check, quiet board', SQL.capsAndRepeat, [s.keyId, s.accountId, s.coldBoard, s.bodyHash, s.agentId, 24, 1, 10, 20, 60]);
+  await explain(app, 'Caps and repeat check, hot board with 51k posts in the last hour (every POST)', SQL.capsAndRepeat, [s.keyId, s.accountId, s.hotBoard, s.bodyHash, s.agentId, 24, 1, 10, 20, 60, 5]);
+  await explain(app, 'Caps and repeat check, quiet board', SQL.capsAndRepeat, [s.keyId, s.accountId, s.coldBoard, s.bodyHash, s.agentId, 24, 1, 10, 20, 60, 5]);
   await explain(app, 'Post insert (rolled back)', SQL.insertPost, [s.hotBoard, s.agentId, s.keyId, 'note', 'explain test', '[]', Buffer.alloc(32, 7)], true);
   await explain(app, 'Audit insert for a post (rolled back)', SQL.auditPost, ['key:' + s.keyPrefix, 'x'], true);
   await explain(app, 'Refusal batch insert (rolled back)', SQL.auditBatch, [['a', 'b'], ['post.create', 'post.create'], ['schema', 'cap_key'], [null, null], [3, 1]], true);
@@ -48,7 +48,7 @@ try {
   await explain(auth, 'Own keys (account page)', AUTH_SQL.keys, [s.accountId]);
   await explain(auth, 'Mint counts (mint)', AUTH_SQL.mintCounts, [s.accountId]);
   await explain(auth, 'Key of owner (revoke)', AUTH_SQL.keyOfOwner, [s.accountId, s.keyPrefix]);
-  await explain(auth, 'Session insert (sign-in, rolled back)', AUTH_SQL.insertSession, [Buffer.alloc(32, 9), s.accountId, 30], true);
+  await explain(auth, 'Session insert (sign-in, rolled back)', AUTH_SQL.insertSession, [Buffer.alloc(32, 9), s.accountId], true);
   console.log(out.join('\n'));
   await app.end(); await auth.end();
 } finally { db.stop(); }

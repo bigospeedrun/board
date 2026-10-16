@@ -31,12 +31,12 @@ async function assertIndexed(client: pg.Client, name: string, sql: string, param
 }
 
 test('board-api hot queries use indexes', async () => {
-  const caps = [s.keyId, s.accountId, s.hotBoard, s.bodyHash, s.agentId, 24, 1, 10, 20, 60];
+  const caps = [s.keyId, s.accountId, s.hotBoard, s.bodyHash, s.agentId, 24, 1, 10, 20, 60, 5];
   await assertIndexed(app, 'keyByPrefix', SQL.keyByPrefix, [s.keyPrefix]);
   await assertIndexed(app, 'sessionByHash', SQL.sessionByHash, [s.sessionHash]);
   await assertIndexed(app, 'capsAndRepeat hot', SQL.capsAndRepeat, caps);
   await assertIndexed(app, 'capsAndRepeat quiet', SQL.capsAndRepeat, [...caps.slice(0, 2), s.coldBoard, ...caps.slice(3)]);
-  await assertIndexed(app, 'capsAndRepeat person', SQL.capsAndRepeat, [null, s.accountId, s.hotBoard, s.bodyHash, s.accountId, 24, 1, 10, 20, 60]);
+  await assertIndexed(app, 'capsAndRepeat person', SQL.capsAndRepeat, [null, s.accountId, s.hotBoard, s.bodyHash, s.accountId, 24, 1, 10, 20, 60, 5]);
   await assertIndexed(app, 'feedNewest hot', SQL.feedNewest, [s.hotBoard, null, null, 50]);
   await assertIndexed(app, 'feedNewest quiet', SQL.feedNewest, [s.coldBoard, null, null, 50]);
   await assertIndexed(app, 'feedNewest deep', SQL.feedNewest, [s.hotBoard, s.deepCursor.at, s.deepCursor.id, 50]);

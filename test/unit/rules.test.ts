@@ -55,3 +55,27 @@ test('cookie, cursor and config parsing', () => {
   assert.equal(configFrom({BOARD_WRITES: 'off'}).writes, false);
   assert.throws(() => configFrom({BOARD_WRITES: 'maybe'}));
 });
+
+test('review fixes: hidden line breaks, bidi and zero-width characters are refused', async () => {
+  const {contentProblem, LINE_BREAK} = await import('../../src/rules.ts');
+  for (const bad of ['a\rb', 'a\u0085b', 'a b', 'a b', 'a‮b', 'a⁦b', 'a‎b', 'a؜b', 'a​b', 'a‍b', 'a⁠b', 'a﻿b'])
+    assert.ok(contentProblem(bad), JSON.stringify(bad));
+  assert.equal(contentProblem('tabs\tand\nnewlines are fine, café 中文 ü'), null);
+  assert.deepEqual('a\r\nb\rc\nd e f\u0085g'.split(LINE_BREAK), ['a', 'b', 'c', 'd', 'e', 'f', 'g']);
+});
+
+test('review fixes: impossible cursor dates and bad account-age settings are refused', () => {
+  assert.equal(parseCursor('2026-13-45T25:61:00Z_00000000-0000-0000-0000-000000000000'), 'invalid');
+  assert.equal(parseCursor('2026-02-30T00:00:00Z_00000000-0000-0000-0000-000000000000'), 'invalid');
+  assert.equal(parseCursor('2026-10-16T00:00:00Z_0000000000000000000000000000000000-0'), 'invalid');
+  for (const bad of ['-1', '1.5', 'x', '', '99999']) assert.throws(() => configFrom({BOARD_MIN_ACCOUNT_AGE_DAYS: bad}), /integer/, bad);
+  assert.equal(configFrom({BOARD_MIN_ACCOUNT_AGE_DAYS: '0'}).minAccountAgeDays, 0);
+});
+
+test('review fixes: role passwords go to Postgres as SCRAM verifiers, never in clear', async () => {
+  const {scramVerifier} = await import('../../db/migrate.ts');
+  const v = scramVerifier('a-long-test-password-0123456789');
+  assert.match(v, /^SCRAM-SHA-256\$4096:[A-Za-z0-9+\/=]{24}\$[A-Za-z0-9+\/=]{44}:[A-Za-z0-9+\/=]{44}$/);
+  assert.ok(!v.includes('a-long-test-password'));
+  assert.notEqual(v, scramVerifier('a-long-test-password-0123456789'));
+});

@@ -11,36 +11,45 @@
 import type {IncomingMessage, ServerResponse} from 'node:http';
 import {createHmac, randomBytes, timingSafeEqual} from 'node:crypto';
 import {LIMITS, type Config, mintKey, newSessionToken, sha256, cookieValue, SESSION_COOKIE} from './rules.ts';
+import {RefusalLog} from './api.ts';
 
 export interface GitHubUser {id: number; login: string; name: string | null; created_at: string}
 export interface GitHub {exchange(code: string): Promise<string>; user(token: string): Promise<GitHubUser>}
 export interface KeyRow {prefix: string; label: string; createdAt: string; revoked: boolean}
 export interface AuthStore {
   signIn(user: GitHubUser): Promise<{authorId: string; banned: boolean}>;
-  createSession(authorId: string, tokenHash: Buffer, days: number): Promise<void>;
+  createSession(authorId: string, tokenHash: Buffer): Promise<void>;   // expires by the DB default (30 days)
   session(tokenHash: Buffer): Promise<{sessionId: string; authorId: string; login: string; githubCreatedAt: Date | null} | null>;
   endSession(sessionId: string): Promise<void>;
   keys(ownerId: string): Promise<KeyRow[]>;
-  mintCounts(ownerId: string): Promise<{active: number; today: number}>;
-  addKey(ownerId: string, label: string, prefix: string, secretHash: Buffer): Promise<void>;
+  // Checks both mint caps and inserts in one transaction under a per-owner advisory lock.
+  createKey(ownerId: string, label: string, prefix: string, secretHash: Buffer, maxActive: number, maxPerDay: number): Promise<'ok' | 'cap_keys_active' | 'cap_keys_day'>;
   revokeKey(ownerId: string, prefix: string, actor: string): Promise<boolean>;
   audit(actor: string | null, action: string, rule: string | null, target: string | null): Promise<void>;
+  auditBatch(rows: {actor: string | null; action: string; rule: string | null; target: string | null; count: number}[]): Promise<void>;
 }
-export interface AuthOptions {clientId: string; stateSecret: Buffer; sessionDays?: number; maxActiveKeys?: number; maxMintsPerDay?: number}
+export interface AuthOptions {clientId: string; stateSecret: Buffer; maxActiveKeys?: number; maxMintsPerDay?: number}
+export const SESSION_DAYS = 30; // must match the session.expires_at default in the schema
+const STATE_SECONDS = 600;
 
 const STATE_COOKIE = 'bos_board_oauth_state';
 const page = (title: string, body: string) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <meta name="robots" content="noindex"><title>${title}</title><body style="font-family:system-ui;max-width:42rem;margin:2rem auto;padding:0 1rem">${body}</body>`;
 const esc = (s: string) => s.replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]!));
 
-export function signState(secret: Buffer, nonce: string): string {
-  return nonce + '.' + createHmac('sha256', secret).update(nonce).digest('base64url');
+// OAuth state: nonce.issuedAt.mac, where the MAC covers both, so a state is good for
+// 10 minutes only (the cookie has the same lifetime, but a copied state does not).
+export function signState(secret: Buffer, nonce: string, issuedAt = Math.floor(Date.now() / 1000)): string {
+  const body = `${nonce}.${issuedAt}`;
+  return body + '.' + createHmac('sha256', secret).update(body).digest('base64url');
 }
-export function stateValid(secret: Buffer, cookie: string | null, param: string | null): boolean {
+export function stateValid(secret: Buffer, cookie: string | null, param: string | null, now = Date.now()): boolean {
   if (!cookie || !param || cookie !== param) return false;
-  const [nonce, mac] = cookie.split('.');
-  if (!nonce || !mac) return false;
-  const want = Buffer.from(signState(secret, nonce).split('.')[1]);
+  const [nonce, issued, mac] = cookie.split('.');
+  if (!nonce || !/^\d{10}$/.test(issued ?? '') || !mac) return false;
+  const age = now / 1000 - Number(issued);
+  if (age > STATE_SECONDS || age < -60) return false;
+  const want = Buffer.from(signState(secret, nonce, Number(issued)).split('.')[2]);
   const got = Buffer.from(mac);
   return want.length === got.length && timingSafeEqual(want, got);
 }
@@ -75,8 +84,9 @@ async function readForm(req: IncomingMessage): Promise<Record<string, string> | 
   return 'bad';
 }
 
-export function createAuth(store: AuthStore, github: GitHub, config: Config, options: AuthOptions, requestMs: number = LIMITS.requestMs) {
-  const sessionDays = options.sessionDays ?? 30, maxActive = options.maxActiveKeys ?? 5, maxMints = options.maxMintsPerDay ?? 10;
+export function createAuth(store: AuthStore, github: GitHub, config: Config, options: AuthOptions, requestMs: number = LIMITS.requestMs,
+                           refusals = new RefusalLog({audit: rows => store.auditBatch(rows)})) {
+  const maxActive = options.maxActiveKeys ?? 5, maxMints = options.maxMintsPerDay ?? 10;
   const secure = config.origin.startsWith('https:') ? '; Secure' : '';
   const html = (res: ServerResponse, status: number, body: string, headers: Record<string, string | string[]> = {}) => {
     if (res.headersSent) return;
@@ -91,8 +101,9 @@ export function createAuth(store: AuthStore, github: GitHub, config: Config, opt
     res.end(JSON.stringify(value));
   };
   const wantsJson = (req: IncomingMessage) => (req.headers['content-type'] ?? '').startsWith('application/json') || /application\/json/.test(req.headers.accept ?? '');
+  // Refusals are counted in the batched RefusalLog, never one audit row per request.
   const fail = async (req: IncomingMessage, res: ServerResponse, status: number, rule: string, message: string, actor: string | null = null) => {
-    await store.audit(actor, 'auth.refuse', rule, null).catch(() => {});
+    refusals.add(actor, 'auth.refuse', rule);
     return wantsJson(req) ? json(res, status, {error: {rule, message}}) : html(res, status, page('Board', `<p>${esc(message)}</p><p><a href="/board/auth/account">Back</a></p>`));
   };
 
@@ -114,6 +125,8 @@ export function createAuth(store: AuthStore, github: GitHub, config: Config, opt
   }
 
   async function callback(req: IncomingMessage, res: ServerResponse, url: URL) {
+    // Sign-in writes an author and a session row, so the kill switch stops it too.
+    if (!config.writes) return fail(req, res, 503, 'kill_switch', 'Sign-in is paused. Reading the board still works.');
     const code = url.searchParams.get('code');
     if (!code || !/^[A-Za-z0-9_-]{1,64}$/.test(code) || !stateValid(options.stateSecret, rawCookie(req.headers.cookie, STATE_COOKIE), url.searchParams.get('state')))
       return fail(req, res, 400, 'oauth_state', 'Sign-in failed. Please try again.');
@@ -123,12 +136,15 @@ export function createAuth(store: AuthStore, github: GitHub, config: Config, opt
     const {authorId, banned} = await store.signIn(user);
     if (banned) return fail(req, res, 403, 'banned', 'This account cannot use the board.', 'author:' + authorId);
     const {token, tokenHash} = newSessionToken();
-    await store.createSession(authorId, tokenHash, sessionDays);
+    await store.createSession(authorId, tokenHash);
     await store.audit('author:' + authorId, 'auth.sign_in', null, user.login);
-    res.writeHead(303, {Location: '/board/auth/account', 'Cache-Control': 'no-store', 'Set-Cookie': [
-      `${SESSION_COOKIE}=${token}; Path=/board; Max-Age=${sessionDays * 86400}; HttpOnly; SameSite=Strict${secure}`,
+    // The callback is reached by a navigation that started on github.com, so a redirect
+    // from here would still be cross-site and the browser would not send the new
+    // SameSite=Strict cookie. A 200 page on our origin that refreshes to the account
+    // page starts a same-site navigation, so the cookie stays Strict and is sent.
+    html(res, 200, page('Signed in', '<meta http-equiv="refresh" content="0;url=/board/auth/account"><p>Signed in. <a href="/board/auth/account">Continue</a></p>'), {'Set-Cookie': [
+      `${SESSION_COOKIE}=${token}; Path=/board; Max-Age=${SESSION_DAYS * 86400}; HttpOnly; SameSite=Strict${secure}`,
       `${STATE_COOKIE}=; Path=/board/auth; Max-Age=0; HttpOnly; SameSite=Lax${secure}`]});
-    res.end();
   }
 
   async function account(req: IncomingMessage, res: ServerResponse, minted?: string) {
@@ -171,11 +187,10 @@ ${minted ? `<p><strong>New key (shown once, copy it now):</strong><br><code>${es
     if (!/^[\p{L}\p{N} ._-]{1,64}$/u.test(label) || Object.keys(form).some(k => k !== 'label')) return fail(req, res, 400, 'body', 'Use a label of 1-64 letters, digits, spaces, dots, dashes or underscores.', actor);
     const age = s.githubCreatedAt ? (Date.now() - s.githubCreatedAt.getTime()) / 86400000 : 0;
     if (age < config.minAccountAgeDays) return fail(req, res, 403, 'account_too_new', 'GitHub accounts younger than 30 days can read only.', actor);
-    const counts = await store.mintCounts(s.authorId);
-    if (counts.active >= maxActive) return fail(req, res, 429, 'cap_keys_active', `At most ${maxActive} active keys; revoke one first.`, actor);
-    if (counts.today >= maxMints) return fail(req, res, 429, 'cap_keys_day', `At most ${maxMints} new keys per day.`, actor);
     const key = mintKey();
-    await store.addKey(s.authorId, label, key.prefix, key.secretHash);
+    const created = await store.createKey(s.authorId, label, key.prefix, key.secretHash, maxActive, maxMints);
+    if (created === 'cap_keys_active') return fail(req, res, 429, created, `At most ${maxActive} active keys; revoke one first.`, actor);
+    if (created === 'cap_keys_day') return fail(req, res, 429, created, `At most ${maxMints} new keys per day.`, actor);
     await store.audit(actor, 'key.mint', null, key.prefix);
     return wantsJson(req) ? json(res, 201, {key: key.key, prefix: key.prefix}) : account(req, res, key.key);
   }

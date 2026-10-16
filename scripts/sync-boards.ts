@@ -31,8 +31,14 @@ export function seededSlugs(dir = MIGRATIONS): Set<string> {
   const slugs = new Set<string>();
   for (const file of readdirSync(dir).filter(f => f.endsWith('.sql'))) {
     const sql = readFileSync(dir + file, 'utf8');
-    for (const block of sql.matchAll(/INSERT INTO board\.board[^;]*;/g))
-      for (const m of block[0].matchAll(/\(\s*'([a-z0-9-]+)'\s*,/g)) slugs.add(m[1]);
+    // Each ('slug', 'title') tuple after INSERT INTO board.board, up to the statement's
+    // end. Titles are quoted SQL strings ('' is a quote), so a ';' or ')' inside a title
+    // cannot end the scan early.
+    for (const start of sql.matchAll(/INSERT INTO board\.board\b[^(]*\([^)]*\)\s*VALUES/gi)) {
+      const tuple = /\s*,?\s*\(\s*'([a-z0-9-]+)'\s*,\s*'(?:[^']|'')*'\s*\)/y;
+      tuple.lastIndex = start.index! + start[0].length;
+      for (let m; (m = tuple.exec(sql));) slugs.add(m[1]);
+    }
   }
   return slugs;
 }

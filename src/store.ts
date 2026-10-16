@@ -16,7 +16,8 @@ export const SQL = {
   lockBoard: `SELECT pg_advisory_xact_lock(hashtextextended('board:' || $1, 0))`,
   boardExists: 'SELECT 1 FROM board.board WHERE slug = $1',
   // $1 key id (null for a person), $2 account id, $3 board, $4 body hash, $5 author id,
-  // $6 repeat window per author (h), $7 repeat window per board (h), $8-$10 the caps.
+  // $6 repeat window per author (h), $7 repeat window per board (h), $8-$11 the caps
+  // per key, per account, per board, per account on this board.
   // Each count stops at its cap (inner LIMIT), so a check reads at most 10, 20 and 60
   // index entries however busy the board is. ORDER BY ... DESC matches the index, so the
   // planner walks it backward from now; without it, LIMIT made a seq scan look cheap
@@ -28,6 +29,8 @@ export const SQL = {
          AND created_at > now() - interval '1 hour' LIMIT $9) a)::int AS per_account,
       (SELECT count(*) FROM (SELECT 1 FROM board.post WHERE board_slug = $3 AND created_at > now() - interval '1 hour'
          ORDER BY board_slug DESC, created_at DESC LIMIT $10) b)::int AS per_board,
+      (SELECT count(*) FROM (SELECT 1 FROM board.post WHERE author_id IN (SELECT id FROM board.author WHERE id = $2 OR owner_id = $2)
+         AND board_slug = $3 AND created_at > now() - interval '1 hour' LIMIT $11) ab)::int AS per_account_board,
       EXISTS (SELECT 1 FROM board.post WHERE body_hash = $4 AND
          ((author_id = $5 AND created_at > now() - make_interval(hours => $6))
           OR (board_slug = $3 AND created_at > now() - make_interval(hours => $7)))) AS repeat`,
@@ -44,7 +47,10 @@ export const SQL = {
       SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::int[])`,
 } as const;
 
-export function pgStore(pool: pg.Pool): Store {
+// Two pools: lookups and feeds read on one, posts and audit rows write on the other, so
+// a burst of posts waiting on locks cannot starve reads (and the reverse).
+export function pgStore(write: pg.Pool, read: pg.Pool = write): Store {
+  const pool = read;
   return {
     async keyByPrefix(prefix) {
       const r = await pool.query(SQL.keyByPrefix, [prefix]);
@@ -55,7 +61,7 @@ export function pgStore(pool: pg.Pool): Store {
       return r.rows[0] ? {authorId: r.rows[0].author_id, githubCreatedAt: r.rows[0].github_created_at} : null;
     },
     async createPost(actor: Actor, input: PostInput, hash: Buffer): Promise<CreateResult> {
-      const client = await pool.connect();
+      const client = await write.connect();
       try {
         await client.query('BEGIN');
         // Serialize writes per account and per board (always in this order), so two
@@ -65,9 +71,10 @@ export function pgStore(pool: pg.Pool): Store {
         if (!(await client.query(SQL.boardExists, [input.board])).rowCount) { await client.query('ROLLBACK'); return {ok: false, rule: 'unknown_board'}; }
         const counts = (await client.query(SQL.capsAndRepeat,
           [actor.keyId, actor.accountId, input.board, hash, actor.authorId, LIMITS.repeatAuthorHours, LIMITS.repeatBoardHours,
-           LIMITS.perKeyHour, LIMITS.perAccountHour, LIMITS.perBoardHour])).rows[0];
+           LIMITS.perKeyHour, LIMITS.perAccountHour, LIMITS.perBoardHour, LIMITS.perAccountBoardHour])).rows[0];
         const rule = actor.keyId && counts.per_key >= LIMITS.perKeyHour ? 'cap_key'
           : counts.per_account >= LIMITS.perAccountHour ? 'cap_account'
+          : counts.per_account_board >= LIMITS.perAccountBoardHour ? 'cap_account_board'
           : counts.per_board >= LIMITS.perBoardHour ? 'cap_board'
           : counts.repeat ? 'repeat' : null;
         if (rule) { await client.query('ROLLBACK'); return {ok: false, rule}; }
@@ -90,7 +97,7 @@ export function pgStore(pool: pg.Pool): Store {
     },
     async audit(rows) {
       if (!rows.length) return;
-      await pool.query(SQL.auditBatch,
+      await write.query(SQL.auditBatch,
         [rows.map(r => r.actor?.slice(0, 80) ?? null), rows.map(r => r.action), rows.map(r => r.rule), rows.map(r => r.target?.slice(0, 120) ?? null), rows.map(r => r.count)]);
     },
   };
