@@ -3,14 +3,15 @@
 //
 // Env: PGHOST (socket dir or host), PGPORT, PGDATABASE, PGUSER (owner),
 // PGPASSWORD_FILE, and optionally BOARD_APP_PASSWORD_FILE, BOARD_AUTH_PASSWORD_FILE,
-// BOARD_ADMIN_PASSWORD_FILE.
+// BOARD_ADMIN_PASSWORD_FILE, BOARD_DUMP_PASSWORD_FILE.
 import {readdirSync, readFileSync} from 'node:fs';
 import {createHash, createHmac, pbkdf2Sync, randomBytes} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import pg from 'pg';
 
 const DIR = fileURLToPath(new URL('./migrations/', import.meta.url));
-const ROLES = {board_app: 'BOARD_APP_PASSWORD_FILE', board_auth: 'BOARD_AUTH_PASSWORD_FILE', board_admin: 'BOARD_ADMIN_PASSWORD_FILE'};
+const ROLES = {board_app: 'BOARD_APP_PASSWORD_FILE', board_auth: 'BOARD_AUTH_PASSWORD_FILE', board_admin: 'BOARD_ADMIN_PASSWORD_FILE',
+  board_dump: 'BOARD_DUMP_PASSWORD_FILE'};
 
 // A SCRAM-SHA-256 verifier (the format Postgres stores), computed here so the plain
 // password never reaches the server, its logs or pg_stat_activity.

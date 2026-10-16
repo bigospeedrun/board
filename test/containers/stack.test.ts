@@ -36,7 +36,7 @@ before(async () => {
   for (const dir of [apiSockets, authSockets]) chmodSync(dir, 0o777); // test only; production: group wg-caddy, mode 2770
   const owner = randomBytes(24).toString('base64url');
   for (const [name, value] of Object.entries({owner_password: owner, owner_password_node: owner, app_password: randomBytes(24).toString('base64url'),
-      auth_password: randomBytes(24).toString('base64url'), admin_password: randomBytes(24).toString('base64url'),
+      auth_password: randomBytes(24).toString('base64url'), admin_password: randomBytes(24).toString('base64url'), dump_password: randomBytes(24).toString('base64url'),
       github_client_secret: randomBytes(20).toString('hex'), state_secret: randomBytes(32).toString('base64url')})) {
     writeFileSync(join(secrets, name), value + '\n'); chmodSync(join(secrets, name), 0o444); // test only; production 0440 + group
   }

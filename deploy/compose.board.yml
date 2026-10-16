@@ -12,8 +12,8 @@
 # uid (api 10001, auth 10002, migrate 10003, admin 10004, egress 10005). Host setup:
 # /etc/bigospeedrun/board/ holds the secret files, root-owned, mode 0440, each readable
 # by one group only: owner_password 999 (postgres), app_password 10001, auth_password,
-# github_client_secret and state_secret 10002, owner_password_node 10003 and
-# admin_password 10004. /run/bigospeedrun-board/api and /run/bigospeedrun-board/auth are
+# github_client_secret and state_secret 10002, owner_password_node and dump_password
+# 10003, admin_password 10004. (Root also reads dump_password: the bosbackup dump program.) /run/bigospeedrun-board/api and /run/bigospeedrun-board/auth are
 # two directories owned by Caddy's group (wg-caddy, gid in BOARD_SOCKET_GID), mode 2770:
 # Caddy reaches both sockets, and each service sees only its own directory.
 x-hardening: &hardening
@@ -91,12 +91,14 @@ services:
       BOARD_APP_PASSWORD_FILE: /run/secrets/app_password
       BOARD_AUTH_PASSWORD_FILE: /run/secrets/auth_password
       BOARD_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      BOARD_DUMP_PASSWORD_FILE: /run/secrets/dump_password
     volumes:
       - board-db-socket:/var/run/postgresql
       - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/owner_password_node:/run/secrets/owner_password:ro
       - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/app_password:/run/secrets/app_password:ro
       - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/auth_password:/run/secrets/auth_password:ro
       - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/admin_password:/run/secrets/admin_password:ro
+      - ${BOARD_SECRETS_DIR:-/etc/bigospeedrun/board}/dump_password:/run/secrets/dump_password:ro
     depends_on:
       board-db: {condition: service_healthy}
 

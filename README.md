@@ -88,6 +88,7 @@ for new races. It never removes a board.
 | `src/vendor/egress-proxy.mjs` | the project's allowlist proxy, copied from bigospeedrun/site at cb1123e |
 | `db/migrate.ts`, `db/migrations/` | forward-only migrations and role passwords |
 | `deploy/compose.board.yml`, `deploy/board.caddy`, `Dockerfile` | containers, Caddy routes, image |
+| `.github/workflows/image.yml`, `scripts/image-registry.mjs` | image build and push to GHCR, retention (see Image) |
 | `docs/queries.md` | every query, its index and its plan on 1M posts; edge caching of feeds |
 
 ## Tests
@@ -101,6 +102,7 @@ npm run test:containers    # the whole stack behind a test Caddy that loads depl
 ```
 
 CI (`.github/workflows/test.yml`) runs the typecheck, the unit tests and the DB tests.
+`.github/workflows/image.yml` runs the typecheck and the unit tests again before it builds.
 `test:containers` covers playbook checklist item 11. It needs Docker, takes about 2
 minutes, and checks that each of these fails:
 - a forbidden path, an oversized body, an unknown JSON field, a cap overrun, and a
@@ -117,7 +119,9 @@ minutes, and checks that each of these fails:
    - `owner_password`: group 999 (Postgres);
    - `app_password`: group 10001 (board-api);
    - `auth_password`, `github_client_secret` and `state_secret`: group 10002 (board-auth);
-   - `owner_password_node` (the same value as `owner_password`): group 10003 (migrate);
+   - `owner_password_node` (the same value as `owner_password`) and `dump_password`:
+     group 10003 (migrate, which sets the role passwords). Root also reads
+     `dump_password`: the backup dump program (see Backups);
    - `admin_password`: group 10004 (admin).
 
    Each value has at least 24 random characters and is written through a pipe, never
@@ -131,14 +135,61 @@ minutes, and checks that each of these fails:
    `github_client_secret` (step 1) through a pipe, never printed.
 4. Point `board.bigospeedrun.com` at the VPS in DNS. TLS for it is set up the same way
    as for the other sites on the box (not checked here).
-5. In the compose env, set `BOARD_IMAGE` (a CI-built digest) and `BOARD_SOCKET_GID` (the
-   gid of wg-caddy). Run `docker compose up -d --wait`. Then add a
+5. In the compose env, set `BOARD_IMAGE` and `BOARD_SOCKET_GID` (the gid of wg-caddy).
+   `BOARD_IMAGE` is `ghcr.io/bigospeedrun/board@sha256:...`: the image workflow
+   (`.github/workflows/image.yml`) prints the digest of each build in its run summary.
+   The package must be public; the workflow warns when it is not (a maintainer sets
+   this once in the org's package settings, since `GITHUB_TOKEN` cannot). Run `docker compose up -d --wait`. Then add a
    `board.bigospeedrun.com` site block to Caddy that imports `deploy/board.caddy`
    (the file has the block in its header).
 6. Add the Cloudflare WAF and rate-limit rules for `board.bigospeedrun.com`.
 7. Kill switch: set `BOARD_WRITES=off` and run `docker compose up -d board-api board-auth`.
 8. Maintainers: `docker compose run --rm board-admin ban <login> <reason>`. The CLI
    also has `revoke`, `hide` and `stats 7`.
+9. Backups: see the next section.
+
+## Image
+
+`.github/workflows/image.yml` runs on every push to `main`: the typecheck and the unit
+tests, then a `linux/amd64` build pushed to `ghcr.io/bigospeedrun/board` with the tags
+`sha-<commit>` and `main`. It keeps the newest 30 images (tags `main` and `keep-*` are
+never pruned), like the site's `site-image.yml`. The registry steps are
+`scripts/image-registry.mjs`, a copy of the site's `scripts/site-image-registry.mjs`
+(commit 7e4dbea): changes go upstream first, then the copy is refreshed.
+
+## Backups
+
+The board database is backed up off the server by the same pull design as the other
+databases on the VPS: once a day the backup host connects to a forced-command SSH login,
+which can only run one dump program as root. The program dumps and encrypts the
+database on the VPS and streams the ciphertext out; the VPS holds no decryption key.
+The host names, keys and the private runbook are not in this public repo.
+
+What this repo provides:
+- **Role `board_dump`** (migration 0005): LOGIN, at most 2 connections, read-only by
+  default, `SELECT` on every table and view in schema `board` (also on tables that later
+  migrations add) and on `board_meta.migration`, and nothing else. Its password comes
+  from `dump_password` (step 1), set by `db/migrate.ts` as a SCRAM verifier.
+  `test/db/dump.test.ts` checks the grants, the refused writes, and a real `pg_dump`.
+
+What the backup login (`bosbackup`, a VPS step outside this repo) needs:
+- **Dump program** `/usr/local/sbin/bos-board-backup-dump`, root-owned, the only command
+  of the login (sshd `ForceCommand`, `authorized_keys` with `from=`, `restrict` and
+  `command=`, and one sudoers rule with no arguments). It is a copy of the Wall Game
+  dump program with these constants: compose project `bigospeedrun`, service
+  `board-db`, database `board`, role `board_dump`, and the board's own age recipient.
+- **Differences from Wall Game:** board-db trusts no login, not even on its socket.
+  So every `psql` and `pg_dump` call runs as `board_dump` with
+  `-h /var/run/postgresql`, and the password goes in by
+  `docker exec -e PGPASSWORD` from the environment of the program. The program reads it
+  from `/etc/bigospeedrun/board/dump_password`, and it is never in argv. The
+  metadata queries that Wall Game runs as `postgres` also run as `board_dump`:
+  `pg_control_system()` (the system identifier) and `server_version` work for it
+  (tested). The migration list is `SELECT name FROM board_meta.migration ORDER BY name`.
+- **Backup host:** a `vpsbackup` conf `bigospeedrun-board` with `pg_image`
+  `postgres:18.6-bookworm` (the same digest as `board-db`). Two values are set at
+  deploy: the new age recipient and the system identifier of the new `board-db`. The
+  age identity stays on the backup host, and Nil keeps one off-box copy.
 
 ## Read page on the site (plan, not built)
 
