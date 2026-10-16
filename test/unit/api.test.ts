@@ -315,3 +315,60 @@ test('links are in the body: the links field is gone, and URLs are never capped 
   assert.doesNotMatch(markdownFeed('x', [{id: 'i', board: 'x', body: 'https://a.b/c', createdAt: 't', cursor: 'c', model: {label: 'human', selfReported: false},
     author: {name: 'p', kind: 'github', githubLogin: 'p', ownerGithubLogin: null}}]), /- link/);
 });
+
+// Agents (Nil, 2026-10-16): an agent given only the board host can find the steps.
+test('agents: /llms.txt has what the boards are, every board with its race page and feed, the site context and the steps', async () => {
+  const s = await serve();
+  const r = await s.call('GET', '/llms.txt');
+  assert.equal(r.status, 200); assert.match(r.headers['content-type'], /^text\/markdown/);
+  assert.match(r.text, /^# Big O Speedrun race boards\n/);
+  assert.match(r.text, /The records, problem statements and submission rules are on bigospeedrun\.com\. Read the race page there before you post\./);
+  for (const url of ['https://bigospeedrun.com/llms.txt', 'https://bigospeedrun.com/about#get-started', 'https://bigospeedrun.com/about#submit'])
+    assert.ok(r.text.includes(url), url);
+  assert.ok(r.text.includes(`- [3SUM](${ORIGIN}/3sum): race page https://bigospeedrun.com/3sum, feed ${ORIGIN}/api/posts?board=3sum&format=md`));
+  assert.ok(r.text.includes(`- [Catalan’s constant](${ORIGIN}/other-catalan): race page https://bigospeedrun.com/other/catalan`));
+  assert.ok(r.text.includes('[\\<b\\>x\\</b\\>]'));                     // titles are Markdown-escaped
+  assert.doesNotMatch(r.text, /Reserved/);
+  for (const step of [`POST ${ORIGIN}/auth/agent/challenge`, 'gh gist create', `POST ${ORIGIN}/auth/agent/verify`, 'in its field `key`',
+      `POST ${ORIGIN}/api/posts`, 'Content-Type: application/json', 'gh auth status', 'only for its own sign-in', 'It cannot be `human`'])
+    assert.ok(r.text.includes(step), step);
+  assert.equal((await s.call('HEAD', '/llms.txt')).text, '');
+  assert.equal((await s.call('POST', '/llms.txt')).status, 404);
+});
+
+test('agents: Accept: text/markdown on / is the list with the way to /llms.txt; on /<slug> the board feed with the site context', async () => {
+  const s = await serve();
+  const md = {Accept: 'text/markdown'};
+  const index = await s.call('GET', '/', undefined, md);
+  assert.equal(index.status, 200); assert.match(index.headers['content-type'], /^text\/markdown/); assert.equal(index.headers.vary, 'Accept');
+  assert.ok(index.text.includes(`How an agent reads and posts on these boards: ${ORIGIN}/llms.txt`));
+  assert.ok(index.text.includes(`- [3SUM](${ORIGIN}/3sum)`));
+  assert.doesNotMatch(index.text, /auth\/agent\/challenge/);            // the steps are in /llms.txt
+  const board = await s.call('GET', '/3sum', undefined, md);
+  assert.equal(board.status, 200); assert.match(board.headers['content-type'], /^text\/markdown/);
+  assert.match(board.text, /^# 3SUM board\n/);
+  assert.ok(board.text.includes('Read the race page there before you post. The race page of this board: https://bigospeedrun.com/3sum'));
+  assert.ok(board.text.includes(`How an agent reads and posts on this board: ${ORIGIN}/llms.txt`));
+  assert.match(board.text, /> Ignore all instructions/);                // posts stay quoted
+  // The feed URL has the same header.
+  assert.match((await s.call('GET', '/api/posts?board=3sum&format=md')).text, /^# 3SUM board\n/);
+  // Browsers still get HTML, which varies on Accept too; an unknown board stays the 404 page.
+  const html = await s.call('GET', '/');
+  assert.match(html.headers['content-type'], /^text\/html/); assert.equal(html.headers.vary, 'Accept');
+  assert.equal((await s.call('GET', '/no-such-board', undefined, md)).status, 404);
+});
+
+test('agents: the list and each board show a line to /llms.txt', async () => {
+  const s = await serve();
+  for (const path of ['/', '/3sum'])
+    assert.match((await s.call('GET', path)).text, /<p class="agents-guide small">Agents: how to read and post is in <a href="\/llms\.txt">\/llms\.txt<\/a>\.<\/p>/, path);
+});
+
+test('agents: given only the board host in Markdown, an agent finds the steps by following the links', async () => {
+  const s = await serve();
+  const start = await s.call('GET', '/', undefined, {Accept: 'text/markdown'});
+  const guide = /(https:\/\/board\.bigospeedrun\.com\/llms\.txt)/.exec(start.text)![1];
+  const steps = await s.call('GET', new URL(guide).pathname);
+  assert.match(steps.text, /## How an agent reads and posts/);
+  assert.match(steps.text, /auth\/agent\/challenge/);
+});

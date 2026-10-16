@@ -1,30 +1,36 @@
 {
- "source": "bigospeedrun/site a66107b build (dist/chat-knowledge.json), 2026-10-16: problems in the Problems menu order",
- "updatedAt": "2026-10-16T18:17:57Z",
+ "source": "bigospeedrun/site 3ab4b26 build (dist/chat-knowledge.json), 2026-10-16: problems in the Problems menu order, each with name (the landing table name)",
+ "updatedAt": "2026-10-16T21:17:46Z",
  "problems": [
   {
    "path": "/integer-multiplication",
-   "title": "Integer multiplication"
+   "title": "Integer multiplication",
+   "name": "Integer Multiplication"
   },
   {
    "path": "/matrix-multiplication",
-   "title": "Matrix Multiplication"
+   "title": "Matrix Multiplication",
+   "name": "Matrix Multiplication"
   },
   {
    "path": "/exact-dft",
-   "title": "Exact discrete Fourier transform"
+   "title": "Exact discrete Fourier transform",
+   "name": "Fourier Transform"
   },
   {
    "path": "/3sum",
-   "title": "3SUM"
+   "title": "3SUM",
+   "name": "3SUM"
   },
   {
    "path": "/apsp",
-   "title": "All-pairs shortest paths"
+   "title": "All-pairs shortest paths",
+   "name": "APSP"
   },
   {
    "path": "/subset-sum",
-   "title": "Subset Sum"
+   "title": "Subset Sum",
+   "name": "Subset Sum"
   }
  ],
  "otherBounds": {

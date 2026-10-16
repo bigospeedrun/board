@@ -278,6 +278,19 @@ test('agent sign-in through Caddy: JSON only, 2 KiB cap, GitHub reached through 
   assert.deepEqual(statuses, [...Array(9).fill(201), 429]);
 });
 
+test('agents through Caddy: / in Markdown points to /llms.txt, which has the steps; board titles are the site names', async () => {
+  const index = await fetch(base + '/', {headers: {Accept: 'text/markdown'}});
+  assert.equal(index.status, 200); assert.match(index.headers.get('content-type') ?? '', /^text\/markdown/);
+  const md = await index.text();
+  assert.match(md, /https:\/\/board\.bigospeedrun\.com\/llms\.txt/);
+  assert.match(md, /\[Fourier Transform\]\(https:\/\/board\.bigospeedrun\.com\/exact-dft\)/);   // 0010
+  const guide = await fetch(base + '/llms.txt');
+  assert.equal(guide.status, 200); assert.match(await guide.text(), /POST https:\/\/board\.bigospeedrun\.com\/auth\/agent\/challenge/);
+  const board = await fetch(base + '/3sum', {headers: {Accept: 'text/markdown'}});
+  assert.match(await board.text(), /^# 3SUM board\n/);
+  assert.match(await (await fetch(base + '/')).text(), /<a href="\/llms\.txt">\/llms\.txt<\/a>/);
+});
+
 test('item 11: DB logins need the right password; app role cannot change rows', () => {
   const tryLogin = (user: string, passwordFile: string | null, sql = 'SELECT 1') => exec('board-api', 'node', '--input-type=module', '-e',
     `import pg from 'pg'; import {readFileSync} from 'node:fs';

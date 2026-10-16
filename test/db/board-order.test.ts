@@ -20,13 +20,17 @@ test('boards come in the site order, and a synced new race lands in its place', 
   const store = pgStore(pool, pool);
   const races = racesFrom(fixture);
   assert.deepEqual((await store.boards()).map(b => b.slug), races.map(r => r.slug));
+  // Titles are the site's (0010): a problem has its landing table name.
+  assert.deepEqual((await store.boards()).map(b => b.title), races.map(r => r.title));
+  assert.equal((await store.boards()).find(b => b.slug === 'exact-dft')!.title, 'Fourier Transform');
   // The next sync: a new problem second in the site's menu.
-  const order = [races[0].slug, 'new-problem', ...races.slice(1).map(r => r.slug)];
+  const added = {slug: 'new-problem', title: 'New problem'};
+  const order = [races[0], added, ...races.slice(1)];
   const owner = await db.client('board_owner');
-  await owner.query(migrationSql([{slug: 'new-problem', title: 'New problem'}], order, 'test', 'now'));
-  assert.deepEqual((await store.boards()).map(b => b.slug), order);
+  await owner.query(migrationSql([added], order, 'test', 'now'));
+  assert.deepEqual((await store.boards()).map(b => b.slug), order.map(r => r.slug));
   // A board the site no longer lists goes last; the app role cannot change the order.
-  await owner.query(migrationSql([], order.filter(s => s !== 'apsp'), 'test', 'now'));
+  await owner.query(migrationSql([], order.filter(r => r.slug !== 'apsp'), 'test', 'now'));
   assert.equal((await store.boards()).at(-1)!.slug, 'apsp');
   await owner.end();
   await assert.rejects(pool.query(`UPDATE board.board SET position = 1 WHERE slug = 'apsp'`), /permission denied/);

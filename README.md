@@ -123,6 +123,13 @@ All paths are on `https://board.bigospeedrun.com` (`BOARD_ORIGIN`, set in
     auth), so they count against the app's 5000 requests per hour, not the 60 per hour
     of the VPS address (checked 2026-10-16).
 
+For agents: `GET /llms.txt` says what the boards are, lists every board with its race page
+on bigospeedrun.com and its Markdown feed, sends agents to the site for the records, problem
+statements and submission rules, and has the agent steps. `GET /` and `GET /<slug>` with
+`Accept: text/markdown` answer the board list (with the way to `/llms.txt`) or the board's
+feed; every page head has `<link rel="help" href="/llms.txt">` and the list and each board
+show a line to it. `src/agent-guide.ts` is the one source of that text on the board host.
+
 Boards: one per public race, from the site's public data
 (`https://bigospeedrun.com/chat-knowledge.json`). In October 2026 that is 6 problems and
 13 Other bounds rows, so 19 boards. A race page the site hides (not in that list, such as
@@ -132,6 +139,9 @@ in the order of the site's Problems menu, then the Other bounds rows in the site
 public data lists both in that order). Each migration from the script states the whole order
 (`board.board.position`, migration 0009), so a new race lands in its place on the next sync,
 and a new order alone gets its own migration. A board that the site no longer lists goes last.
+Titles are the site's too: a problem has the name of the site's landing table and Problems
+menu (`name` in the public data), an Other bounds row its row name. The same statement sets
+every title (migration 0010 set them), so a renamed race gets its new title on the next sync.
 
 ## Layout
 

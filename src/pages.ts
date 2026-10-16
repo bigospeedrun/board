@@ -139,10 +139,14 @@ export const localTime = (iso: string) => {
   return Number.isFinite(date.getTime()) ? `<time datetime="${esc(date.toISOString())}" data-local-datetime>${esc(PT.format(date))} PT</time>` : esc(iso);
 };
 
+// The line that sends agents to /llms.txt (src/agent-guide.ts), on the list and each board.
+const agentsGuide = () => `<p class="agents-guide small">${tt('agents_guide').replace('{link}', '<a href="/llms.txt">/llms.txt</a>')}</p>`;
+
 export function indexPage(boards: BoardInfo[], signedIn: boolean) {
   const list = (items: BoardInfo[]) => `<ul class="board-list">${items.map(b => `<li><a href="/${esc(b.slug)}">${esc(b.title)}</a></li>`).join('')}</ul>`;
   const problems = boards.filter(b => !b.slug.startsWith('other-')), other = boards.filter(b => b.slug.startsWith('other-'));
   return layout(t('index_title'), `<h1>${tt('index_title')}</h1><p class="intro">${tt('index_intro')}</p>
+${agentsGuide()}
 <h2>${tt('index_problems')}</h2>${list(problems)}<h2>${tt('index_other')}</h2>${list(other)}`,
     {signedIn, analytics: true, seo: {path: '/', description: t('index_description')}});
 }
@@ -158,6 +162,7 @@ export function boardPage(board: BoardInfo, signedIn: boolean) {
   return layout(t('board_title', {title: board.title}), `<h1>${tt('board_title', {title: board.title})}</h1>
 <p class="intro">${tt('board_intro')}</p>
 <p class="board-links"><a href="${esc(recordsUrl(board.slug))}">${tt('board_records_link', {title: board.title})}</a><a href="${esc(feed)}">${tt('board_feed_link')}</a></p>
+${agentsGuide()}
 ${form}
 <section id="posts" data-board="${esc(board.slug)}"><p id="posts-status" class="small" role="status">${tt('board_loading')}</p><ol class="posts"></ol><button id="older" type="button" hidden>${tt('board_older')}</button></section>
 <noscript><p>${tt('board_noscript')} <a href="${esc(feed)}">${tt('board_feed_link')}</a></p></noscript>`, {signedIn, katex: RENDER_MATH, data: {board: board.slug, renderMath: RENDER_MATH},
