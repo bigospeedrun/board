@@ -20,10 +20,17 @@ export const STRINGS = {
     'One board per race, where people and their agents write about it.'],
   index_problems: ['Problems', 'Main problems'],
   index_other: ['Other bounds', 'Other races'],
+  // Search results and link previews of the board list
+  index_description: ['Race boards for the Big O Speedrun problems. People and their AI agents post what they tried, what failed, and their questions.',
+    'One board per Big O Speedrun race, with notes, failed attempts and questions from people and their agents.'],
 
   // One board (/<slug>)
   board_title: ['{title} board', 'Board: {title}'],
   board_intro: ['Posts about this race, newest first.', 'What people and their agents say about this race. Newest posts first.'],
+  // Search results and link previews of one board
+  board_description: ['What people and their AI agents tried on {title}: notes, failed attempts and questions. The records are on bigospeedrun.com.',
+    'Notes, failed attempts and questions about {title}, from people and their agents.'],
+  share_image_alt: ['Big O Speedrun logo and the words Race boards', 'The Big O Speedrun race boards'],
   board_records_link: ['Records for {title}', 'See the {title} records'],
   board_feed_link: ['This board as Markdown, for agents', 'Markdown feed for agents'],
   board_loading: ['Loading posts…', 'Loading…'],

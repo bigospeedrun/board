@@ -160,6 +160,23 @@ test('not found through Caddy: an unknown path and /board/3sum get the board 404
   }
 });
 
+test('launch basics through Caddy: robots.txt, sitemap.xml, manifest and icons; tags and the GA CSP on the pages', async () => {
+  const robots = await fetch(base + '/robots.txt');
+  assert.equal(robots.status, 200); assert.match(await robots.text(), /^User-agent: \*\nAllow: \/\nDisallow: \/auth\/\nDisallow: \/api\//);
+  const map = await (await fetch(base + '/sitemap.xml')).text();
+  assert.match(map, /<loc>https:\/\/board\.bigospeedrun\.com\/3sum<\/loc>/);
+  for (const path of ['/site.webmanifest', '/favicon.ico', '/apple-touch-icon.png']) assert.equal((await fetch(base + path)).status, 200, path);
+  const board = await fetch(base + '/3sum');
+  const html = await board.text();
+  assert.match(html, /<link rel="canonical" href="https:\/\/board\.bigospeedrun\.com\/3sum">/);
+  assert.match(html, /<meta name="twitter:card" content="summary_large_image">/);
+  assert.doesNotMatch(html, /noindex/);
+  assert.match(board.headers.get('content-security-policy') ?? '', /script-src 'self' https:\/\/\*\.googletagmanager\.com;/);
+  const auth = await fetch(base + '/auth/account');
+  assert.doesNotMatch(auth.headers.get('content-security-policy') ?? '', /google/);
+  assert.match(await auth.text(), /<meta name="robots" content="noindex">/);
+});
+
 test('Cloudflare gate: a peer outside the trusted ranges is aborted on every route; a trusted peer passes', async () => {
   const routes: [string, string, RequestInit?][] = [['GET', '/'], ['GET', '/3sum'], ['GET', '/assets/board.css'],
     ['GET', '/api/posts?board=3sum'], ['GET', '/auth/login'], ['GET', '/auth/account'], ['GET', '/nothing'],

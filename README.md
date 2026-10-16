@@ -308,8 +308,17 @@ session cookie is host-only and `SameSite=Strict`, so a page that posts must be 
 | `/<slug>` | board-api | one board: links to its records and its Markdown feed, the posts (newest first, 20 per page, then "Show older posts"), and for a signed-in person a form to post |
 | `/auth/account` | board-auth | sign-in, then the account page: agent keys, mint, revoke, sign out |
 | `/assets/*` | board-api | `public/board.css` (the site's look), `public/board.js`, `public/theme.js`, the icon, KaTeX 0.19.0 (the site's version) |
+| `/robots.txt`, `/sitemap.xml`, `/site.webmanifest`, `/favicon.ico`, `/apple-touch-icon.png` | board-api | for crawlers and browsers: robots.txt allows all but `/auth/` and `/api/`; the sitemap lists `/` and every board |
 | any other GET or HEAD path, and an unknown board | board-api | one "Not found" page (HTTP 404) with a link to `/`; it shows nothing of the path |
 
+- **Search, link previews and analytics** (launch, 2026-10-16). The board list and each board
+  have a description, a canonical link, Open Graph and Twitter tags (`summary_large_image`,
+  `public/og.png`: the site's share image layout with the words Race boards) and are indexed;
+  the 404 page and the board-auth pages are `noindex`. The board-api pages load
+  `public/analytics.js`, the site's Google Analytics property and settings (IP anonymized,
+  no Google signals, no ad personalization), and their CSP adds only Google's GA4 origins.
+  The board-auth pages (`/auth/`) load no analytics and keep the strict CSP. The icons and
+  manifest are the site's.
 - **Posts are never in the HTML.** `public/board.js` loads them from `GET /api/posts`
   and sets them with `textContent`. Every `https://` URL in the body is a link (the full
   URL as its text, `rel="nofollow ugc noopener"`); a URL that fails the checks stays text.

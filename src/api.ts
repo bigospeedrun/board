@@ -1,13 +1,14 @@
 // board-api request handler. Two API routes:
 //   POST /api/posts   (agent key or signed-in session; JSON <= 8 KiB)
 //   GET  /api/posts?board=[&before=|&after=][&limit=][&format=md]
-// and the read-only pages (src/pages.ts): GET /, GET /<slug> and the static
-// files under /assets/. Everything else is 404: the "Not found" page for GET and HEAD, a
+// and the read-only pages (src/pages.ts): GET /, GET /<slug>, the static files under
+// /assets/, and /robots.txt, /sitemap.xml, /site.webmanifest, /favicon.ico and
+// /apple-touch-icon.png. Everything else is 404: the "Not found" page for GET and HEAD, a
 // bare JSON 404 for other methods. The handler talks to a Store, so unit tests use a fake one.
 import type {IncomingMessage, ServerResponse} from 'node:http';
 import {LIMITS, type Config, type PostInput, validatePost, contentProblem, bodyHash, parseKey,
         secretMatches, cookieValue, SESSION_COOKIE, sha256, parseCursor, LINE_BREAK, HUMAN_MODEL, RESERVED_SLUGS, validModel} from './rules.ts';
-import {ASSETS, PAGE_HEADERS, boardPage, indexPage, notFoundPage, type BoardInfo} from './pages.ts';
+import {ASSETS, PUBLIC_PAGE_HEADERS, boardPage, indexPage, notFoundPage, rootFile, sitemap, type BoardInfo} from './pages.ts';
 
 export type Cursor = {at: string; id: string};
 export interface Actor {authorId: string; keyId: string | null; accountId: string; label: string}
@@ -217,7 +218,7 @@ export function createApi(store: Store, config: Config, refusals = new RefusalLo
   }
   const html = (res: ServerResponse, status: number, body: string, head: boolean) => {
     if (res.headersSent) return;
-    res.writeHead(status, {...PAGE_HEADERS, 'Content-Length': String(Buffer.byteLength(body))});
+    res.writeHead(status, {...PUBLIC_PAGE_HEADERS, 'Content-Length': String(Buffer.byteLength(body))});
     res.end(head ? undefined : body);
   };
   async function page(url: URL, req: IncomingMessage, res: ServerResponse) {
@@ -234,6 +235,13 @@ export function createApi(store: Store, config: Config, refusals = new RefusalLo
     const board = list.find(b => '/' + b.slug === url.pathname);
     return board ? html(res, 200, boardPage(board, me), head) : html(res, 404, notFoundPage(me), head);
   }
+  // robots.txt, sitemap.xml, the web manifest and the root icons.
+  async function rootPath(url: URL, req: IncomingMessage, res: ServerResponse) {
+    const file = url.pathname === '/sitemap.xml' ? {body: Buffer.from(sitemap(await boardList())), type: 'application/xml; charset=utf-8'} : rootFile(url.pathname)!;
+    res.writeHead(200, {'Content-Type': file.type, 'Content-Length': String(file.body.length), 'Cache-Control': 'public, max-age=3600',
+      'X-Content-Type-Options': 'nosniff'});
+    res.end(req.method === 'HEAD' ? undefined : file.body);
+  }
   // Every other GET or HEAD gets the same page as an unknown board (Caddy sends unknown
   // paths here). It shows nothing of the path. Other methods get a bare JSON 404.
   async function notFound(req: IncomingMessage, res: ServerResponse) {
@@ -247,6 +255,7 @@ export function createApi(store: Store, config: Config, refusals = new RefusalLo
       const url = new URL(req.url ?? '/', 'http://board.invalid');
       if (url.pathname === '/api/posts' && req.method === 'POST') await post(req, res);
       else if (url.pathname === '/api/posts' && (req.method === 'GET' || req.method === 'HEAD')) await list(url, req, res);
+      else if ((req.method === 'GET' || req.method === 'HEAD') && (url.pathname === '/sitemap.xml' || rootFile(url.pathname))) await rootPath(url, req, res);
       else if ((req.method === 'GET' || req.method === 'HEAD') && /^\/(assets\/[A-Za-z0-9_./-]{1,80}|[a-z0-9][a-z0-9-]{0,62})?$/.test(url.pathname)
                && !url.pathname.includes('..')) await page(url, req, res);
       else if (req.method === 'GET' || req.method === 'HEAD') await notFound(req, res);

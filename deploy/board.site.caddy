@@ -16,7 +16,9 @@ board.bigospeedrun.com {
 			disable_tlsalpn_challenge
 		}
 	}
-	header X-Robots-Tag "noindex, nofollow"
+	# No X-Robots-Tag: the board is indexed since its launch (Nil, 2026-10-16). The pages say
+	# noindex themselves where they should not be (sign-in, account, the 404 page), and
+	# robots.txt keeps crawlers out of /auth/ and /api/.
 	# HTTPS only for a year on this host; no includeSubDomains, no preload (Worker 4 review).
 	header Strict-Transport-Security "max-age=31536000"
 	log {
