@@ -84,6 +84,11 @@ services:
     <<: *hardening
     image: ${BOARD_IMAGE}
     user: '10003:10003'
+    # It sets the role passwords, so it reads app_password (group 10001), auth_password
+    # (10002) and admin_password (10004) besides its own group's files. Joining those
+    # groups also lets it read github_client_secret and state_secret (10002) on the host,
+    # but they are not mounted here. Without these groups: EACCES (E1 on the VPS, 2026-10-16).
+    group_add: ['10001', '10002', '10004']
     network_mode: none
     restart: 'no'
     cpus: 0.25

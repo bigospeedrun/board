@@ -7,7 +7,7 @@
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync, spawnSync} from 'node:child_process';
-import {chmodSync, mkdirSync, mkdtempSync, writeFileSync, rmSync} from 'node:fs';
+import {chmodSync, mkdirSync, mkdtempSync, writeFileSync, rmSync, statSync} from 'node:fs';
 import {randomBytes} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {join, dirname} from 'node:path';
@@ -19,6 +19,9 @@ const CADDY = 'caddy:2.11@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa
 const project = 'bosboardtest' + randomBytes(3).toString('hex');
 const work = mkdtempSync(join(tmpdir(), 'bos-board-stack-'));
 const secrets = join(work, 'secrets'), apiSockets = join(work, 'run-api'), authSockets = join(work, 'run-auth');
+// The group of each secret file in production: the only group (with root) that can read it.
+const SECRET_GROUPS: Record<string, number> = {owner_password: 999, owner_password_node: 10003, dump_password: 10003, app_password: 10001,
+  auth_password: 10002, github_client_secret: 10002, state_secret: 10002, admin_password: 10004};
 const env = {...process.env, BOARD_IMAGE: IMAGE, BOARD_SECRETS_DIR: secrets, BOARD_API_SOCKET_DIR: apiSockets, BOARD_AUTH_SOCKET_DIR: authSockets, BOARD_WRITES: 'on', BOARD_SOCKET_GID: '10001'};
 const files = ['-f', join(BOARD, 'deploy/compose.board.yml'), '-f', join(work, 'test.override.yml')];
 const compose = (args: string[], extraEnv: Record<string, string> = {}) => {
@@ -37,9 +40,14 @@ before(async () => {
   const owner = randomBytes(24).toString('base64url');
   for (const [name, value] of Object.entries({owner_password: owner, owner_password_node: owner, app_password: randomBytes(24).toString('base64url'),
       auth_password: randomBytes(24).toString('base64url'), admin_password: randomBytes(24).toString('base64url'), dump_password: randomBytes(24).toString('base64url'),
-      github_client_secret: randomBytes(20).toString('hex'), state_secret: randomBytes(32).toString('base64url')})) {
-    writeFileSync(join(secrets, name), value + '\n'); chmodSync(join(secrets, name), 0o444); // test only; production 0440 + group
-  }
+      github_client_secret: randomBytes(20).toString('hex'), state_secret: randomBytes(32).toString('base64url')}))
+    writeFileSync(join(secrets, name), value + '\n');
+  // The production owners and modes (compose.board.yml header, plan E1): root, 0440, one
+  // group each. A service that reads a secret its groups do not cover fails here, as on the
+  // VPS. chown needs root, so a throwaway container sets them; the work dir is ours, so the
+  // files can still be removed after the test.
+  execFileSync('docker', ['run', '--rm', '--network', 'none', '--user', '0:0', '-v', `${secrets}:/s`, '--entrypoint', 'sh', CADDY, '-c',
+    Object.entries(SECRET_GROUPS).map(([name, gid]) => `chown 0:${gid} /s/${name} && chmod 0440 /s/${name}`).join(' && ')], {stdio: 'ignore'});
   // Same shape as production (board.bigospeedrun.com { import board.caddy }), on plain :8080.
   writeFileSync(join(work, 'Caddyfile'), `{\n\tadmin off\n\tauto_https off\n\tstorage file_system /tmp/caddy\n}\n:8080 {\n\timport /etc/caddy/board.caddy\n}\n`);
   // Test-only front: Caddy with the production board.caddy, published on a random local port.
@@ -85,6 +93,20 @@ after(() => {
 
 const post = (body: unknown, headers: Record<string, string> = {}) => fetch(base + '/board/api/posts', {method: 'POST',
   headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + key, ...headers}, body: typeof body === 'string' ? body : JSON.stringify(body)});
+
+test('secrets have the production owners and modes, and every service reads the ones it mounts', () => {
+  for (const [name, gid] of Object.entries(SECRET_GROUPS)) {
+    const st = statSync(join(secrets, name));
+    assert.deepEqual([st.uid, st.gid, st.mode & 0o777], [0, gid, 0o440], name);
+  }
+  // board-migrate ran (the stack is up, which needs it to finish); the long-running services
+  // read their own files again here.
+  for (const [service, files] of [['board-api', ['app_password']], ['board-auth', ['auth_password', 'github_client_secret', 'state_secret']]] as const)
+    for (const file of files) {
+      const r = exec(service, 'node', '-e', `require('fs').readFileSync('/run/secrets/${file}')`);
+      assert.equal(r.status, 0, `${service} cannot read ${file}: ${r.stderr}`);
+    }
+});
 
 test('positive path: read and post through Caddy', async () => {
   assert.match(key, /^bos_[a-f0-9]{12}_/);
