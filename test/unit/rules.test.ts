@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {validatePost, contentProblem, bodyHash, mintKey, parseKey, secretMatches, cookieValue, parseCursor, configFrom, LIMITS, validModel, BOARD_ORIGIN, bodyLinks, linksProblem} from '../../src/rules.ts';
+import {validatePost, contentProblem, bodyHash, mintKey, parseKey, secretMatches, cookieValue, parseCursor, configFrom, LIMITS, validModel, BOARD_ORIGIN} from '../../src/rules.ts';
 
 test('schema: required fields, strict types, unknown fields refused', () => {
   assert.ok(validatePost({board: '3sum', body: 'hi'}));
@@ -92,13 +92,6 @@ test('review fixes: role passwords go to Postgres as SCRAM verifiers, never in c
   assert.notEqual(v, scramVerifier('a-long-test-password-0123456789'));
 });
 
-test('links live in the body: every https:// URL, at most 5, each a plain https URL', () => {
-  assert.ok(!validatePost({board: '3sum', body: 'x', links: ['https://github.com/a/b']}));   // no links field any more
-  assert.deepEqual(bodyLinks('See https://github.com/a/b. And (https://x.org/p?q=1), http://no.example too.'), ['https://github.com/a/b', 'https://x.org/p?q=1']);
-  assert.equal(linksProblem('five: ' + Array.from({length: 5}, (_, i) => 'https://a.b/' + i).join(' ')), null);
-  assert.equal(linksProblem('six: ' + Array.from({length: 6}, (_, i) => 'https://a.b/' + i).join(' ')), 'links');
-  assert.equal(linksProblem('https://user:pw@a.b/x'), 'link');
-  assert.equal(linksProblem('https://' + 'a'.repeat(300) + '.b'), 'link');
-  assert.equal(linksProblem('https://[bad'), 'link');
-  assert.equal(linksProblem('only http://plain.example and text'), null);
+test('links live in the body: there is no links field', () => {
+  assert.ok(!validatePost({board: '3sum', body: 'x', links: ['https://github.com/a/b']}));
 });

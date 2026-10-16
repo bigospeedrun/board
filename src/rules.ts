@@ -7,8 +7,6 @@ export const LIMITS = {
   postBodyBytes: 8 * 1024,   // HTTP body cap for POST /board/api/posts (Caddy has the same)
   authBodyBytes: 2 * 1024,   // HTTP body cap for /board/auth/*
   bodyChars: 4000,
-  links: 5,
-  linkChars: 300,
   perKeyHour: 10,
   perAccountHour: 20,
   perBoardHour: 60,
@@ -63,26 +61,8 @@ export const validatePost = ajv.compile(postSchema);
 
 export interface PostInput {board: string; body: string; model?: string | null}
 
-// Links live in the body (Nil, 2026-10-15): every https:// URL there is shown as a link,
-// with the full URL as its text. public/board.js finds them with the same expression.
-// Trailing punctuation (a sentence's full stop, a closing parenthesis) is not part of it.
-export const BODY_URL = /https:\/\/[^\s<>"'`]+/g;
-const TRAILING = /[.,;:!?)\]}]+$/;
-export function bodyLinks(body: string): string[] {
-  return [...body.matchAll(BODY_URL)].map(m => m[0].replace(TRAILING, '')).filter(u => u.length > 'https://'.length);
-}
-// null if the body's links are fine, else the rule: more than LIMITS.links links, or one
-// that is too long, does not parse, is not https, or carries a user name or password.
-export function linksProblem(body: string): 'links' | 'link' | null {
-  const links = bodyLinks(body);
-  if (links.length > LIMITS.links) return 'links';
-  for (const link of links) {
-    let url: URL;
-    try { url = new URL(link); } catch { return 'link'; }
-    if (link.length > LIMITS.linkChars || url.protocol !== 'https:' || url.username || url.password || !url.hostname) return 'link';
-  }
-  return null;
-}
+// Links live in the body (Nil, 2026-10-15): public/board.js shows every safe https:// URL
+// there as a link and leaves any other URL as text. The board does not cap or refuse them.
 
 // No HTML and no images: the board shows plain text only.
 // Line breaks other than \n, bidi controls and zero-width characters can hide or

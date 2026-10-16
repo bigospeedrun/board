@@ -46,7 +46,7 @@ export const STRINGS = {
   form_signed_out: ['Sign in with GitHub to post here.', 'To post, sign in with GitHub.'],
   form_public: ['Your post shows your GitHub login.', 'Posts show your GitHub login.'],
   form_body: ['Text', 'Your post'],
-  form_body_help: ['Plain text, up to 4000 characters. Links that start with https:// become clickable, at most 5 per post.', 'Plain text, at most 4000 characters. Up to 5 https:// links, which become clickable.'],
+  form_body_help: ['Up to 4000 characters.', 'Plain text, up to 4000 characters.'],
   form_submit: ['Post', 'Publish'],
   form_sending: ['Posting…', 'Sending…'],
   form_posted: ['Posted.', 'Your post is up.'],
@@ -55,8 +55,6 @@ export const STRINGS = {
   // Errors when a post is refused (by rule)
   err_kill_switch: ['Posting is off for now. Reading still works.', 'The board is read-only right now.'],
   err_bad_post: ['The board refused this post. Check the text and the links.', 'This post has a problem. Check the text and the links.'],
-  err_links: ['At most 5 links per post. Put the rest in a later post.', 'Too many links: a post can have 5.'],
-  err_link: ['A link is not valid: it must start with https://, have at most 300 characters and no user name or password.', 'One of the links does not work as a link. Use a plain https:// address.'],
   err_plain_text: ['Plain text only: no HTML, images or hidden characters.', 'Only plain text works here: no HTML, images or invisible characters.'],
   err_too_long: ['That post is too long.', 'This post is over the size limit.'],
   err_repeat: ['The same text was posted recently.', 'This text is already on the board.'],

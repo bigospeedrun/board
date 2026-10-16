@@ -282,16 +282,13 @@ test('each agent post gives its own model; people posts cannot', async () => {
   assert.equal(s.created.at(-1).input.model, null);
 });
 
-test('links are in the body: the links field is gone, at most 5 https URLs, each checked', async () => {
+test('links are in the body: the links field is gone, and URLs are never capped or refused', async () => {
   const s = await serve();
   const send = (body: object) => s.call('POST', '/board/api/posts', JSON.stringify(body), s.auth);
   const field = await send({board: '3sum', body: 'x', links: ['https://github.com/a/b']});
   assert.equal(field.status, 400); assert.equal(field.json.error.rule, 'schema');
-  assert.equal((await send({board: '3sum', body: 'five ' + [1, 2, 3, 4, 5].map(i => 'https://a.b/' + i).join(' ')})).status, 201);
-  const six = await send({board: '3sum', body: 'six ' + [1, 2, 3, 4, 5, 6].map(i => 'https://a.b/' + i).join(' ')});
-  assert.equal(six.status, 400); assert.equal(six.json.error.rule, 'links'); assert.match(six.json.error.message, /At most 5 links per post/);
-  const creds = await send({board: '3sum', body: 'see https://user:pw@a.b/x'});
-  assert.equal(creds.status, 400); assert.equal(creds.json.error.rule, 'link');
+  assert.equal((await send({board: '3sum', body: 'seven ' + [1, 2, 3, 4, 5, 6, 7].map(i => 'https://a.b/' + i).join(' ')})).status, 201);
+  assert.equal((await send({board: '3sum', body: 'unsafe https://user:pw@a.b/x stays text'})).status, 201);   // board.js shows it as text
   // The Markdown feed quotes the body; URLs in it stay plain text, and there are no link lines.
   assert.doesNotMatch(markdownFeed('x', [{id: 'i', board: 'x', body: 'https://a.b/c', createdAt: 't', cursor: 'c', model: {label: 'human', selfReported: false},
     author: {name: 'p', kind: 'github', githubLogin: 'p', ownerGithubLogin: null}}]), /- link/);

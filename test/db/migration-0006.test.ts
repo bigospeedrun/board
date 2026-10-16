@@ -63,10 +63,9 @@ test('0006 copies each agent key model onto its posts, drops post.kind and autho
   }
 });
 
-test('0007 adds the directed-sssp board and drops the compatibility links column of visible_post', async () => {
+test('0007 drops the compatibility links column of visible_post', async () => {
   const owner = await db.client('board_owner');
-  assert.deepEqual(await migrate(owner, db.env, ALL), ['0007_directed_sssp_board.sql']);
-  assert.equal((await owner.query(`SELECT title FROM board.board WHERE slug = 'directed-sssp'`)).rows[0].title, 'Directed shortest paths');
+  assert.deepEqual(await migrate(owner, db.env, ALL), ['0007_visible_post_cleanup.sql']);
   const cols = (await owner.query(`SELECT column_name FROM information_schema.columns WHERE table_schema = 'board' AND table_name = 'visible_post'`)).rows.map(r => r.column_name);
   assert.ok(!cols.includes('links') && cols.includes('model'));
   await owner.end();

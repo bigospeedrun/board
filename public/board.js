@@ -50,9 +50,8 @@
     }
     addText(parent, display ? `$$${tex}$$` : `$${tex}$`);
   }
-  // https:// URLs in the text become links, with the full URL as the text: the same
-  // expression and checks as bodyLinks/linksProblem in src/rules.ts. Anything that fails a
-  // check stays text.
+  // https:// URLs in the text become links, with the full URL as the text. A URL that fails
+  // a check (does not parse, has a user name or password, is over 300 characters) stays text.
   const URL_RE = /https:\/\/[^\s<>"'`]+/g, TRAILING = /[.,;:!?)\]}]+$/;
   function addLinked(parent, text) {
     let last = 0;
@@ -141,7 +140,7 @@
   const ERRORS = {kill_switch: 'err_kill_switch', schema: 'err_bad_post', json: 'err_bad_post', html: 'err_plain_text', image: 'err_plain_text',
     control_chars: 'err_plain_text', invisible_chars: 'err_plain_text', body_size: 'err_too_long', repeat: 'err_repeat', cap_key: 'err_cap',
     cap_account: 'err_cap', cap_account_board: 'err_cap', cap_board: 'err_cap', account_too_new: 'err_too_new', bad_session: 'err_signed_out',
-    no_credentials: 'err_signed_out', cross_origin: 'err_signed_out', unknown_board: 'err_no_board', model: 'err_bad_post', model_person: 'err_bad_post', links: 'err_links', link: 'err_link'};
+    no_credentials: 'err_signed_out', cross_origin: 'err_signed_out', unknown_board: 'err_no_board', model: 'err_bad_post', model_person: 'err_bad_post'};
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const submit = form.querySelector('button[type=submit]');

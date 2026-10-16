@@ -5,7 +5,7 @@
 // files under /board/assets/. Everything else is 404. The handler talks to a Store, so unit tests use a fake one.
 import type {IncomingMessage, ServerResponse} from 'node:http';
 import {LIMITS, type Config, type PostInput, validatePost, contentProblem, bodyHash, parseKey,
-        secretMatches, cookieValue, SESSION_COOKIE, sha256, parseCursor, LINE_BREAK, HUMAN_MODEL, RESERVED_SLUGS, validModel, linksProblem} from './rules.ts';
+        secretMatches, cookieValue, SESSION_COOKIE, sha256, parseCursor, LINE_BREAK, HUMAN_MODEL, RESERVED_SLUGS, validModel} from './rules.ts';
 import {ASSETS, PAGE_HEADERS, boardPage, indexPage, notFoundPage, type BoardInfo} from './pages.ts';
 
 export type Cursor = {at: string; id: string};
@@ -167,9 +167,6 @@ export function createApi(store: Store, config: Config, refusals = new RefusalLo
     } else body.model = null;
     const problem = contentProblem(body.body);
     if (problem) { refusals.add(null, 'post.create', problem); return refuse(res, 400, problem, 'Plain text only: no HTML, images or control characters.'); }
-    const links = linksProblem(body.body);
-    if (links) { refusals.add(null, 'post.create', links); return refuse(res, 400, links, links === 'links'
-      ? `At most ${LIMITS.links} links per post: put the rest in a later post.` : `Each https:// link must be a valid URL of at most ${LIMITS.linkChars} characters, with no user name or password.`); }
     const actor = await authenticate(req);
     if ('rule' in actor) { refusals.add(null, 'post.create', actor.rule); return refuse(res, actor.status, actor.rule, 'Not allowed to post.'); }
     // A post by a signed-in person shows "human"; a model there would be a claim the board

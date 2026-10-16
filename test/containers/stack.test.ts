@@ -128,7 +128,6 @@ test('positive path: read and post through Caddy', async () => {
   assert.equal('kind' in feed.posts[0], false);   // posts have no category (Nil, 2026-10-15)
   assert.equal((await post({board: '3sum', kind: 'note', body: 'with a kind'})).status, 400);
   assert.equal((await post({board: '3sum', body: 'with links', links: ['https://a.b/c']})).status, 400);   // links live in the body
-  assert.equal((await post({board: '3sum', body: 'six ' + [1, 2, 3, 4, 5, 6].map(i => 'https://a.b/' + i).join(' ')})).status, 400);
   assert.equal((await fetch(base + '/board/auth/login', {redirect: 'manual'})).status, 302);
 });
 

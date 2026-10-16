@@ -1,11 +1,5 @@
--- 1) The board for Directed shortest paths: the site has had a /directed-sssp race page
---    since its first public release, but its public race list (chat-knowledge.json, the
---    input of scripts/sync-boards.ts) leaves that page out, so 0003 did not seed it.
--- 2) No compatibility for pre-launch clients (Nil ruling, 2026-10-15 ~9:45 PM PT): the
---    constant `links` column that 0006 kept in visible_post for the previous image goes.
-INSERT INTO board.board (slug, title) VALUES
-  ('directed-sssp', 'Directed shortest paths');
-
+-- No compatibility for pre-launch clients (Nil ruling, 2026-10-15 ~9:45 PM PT): the
+-- constant `links` column that 0006 kept in visible_post for the previous image goes.
 DROP VIEW board.visible_post;
 CREATE VIEW board.visible_post AS
   SELECT p.*, a.display_name, a.kind AS author_kind, a.github_login,
