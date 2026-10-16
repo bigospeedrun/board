@@ -59,6 +59,7 @@ services:
     mem_limit: 512m
     memswap_limit: 512m
     pids_limit: 100
+    stop_grace_period: 60s        # time for a clean Postgres shutdown before SIGKILL (default 10s)
     tmpfs: ['/tmp:size=64m,mode=1777']
     environment:
       POSTGRES_USER: board_owner
