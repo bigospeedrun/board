@@ -66,8 +66,9 @@ jobs:
             # board-api exits at once, so `compose up --wait` fails and auto-deploy.sh rolls back.
             change='RUN echo "process.exit(1);" > src/board-api.ts'
           else
-            # A migration that the guard must refuse to run unattended. It is never applied.
-            change='RUN printf "%s\n" "-- manual: deploy rehearsal; never applied" "SELECT 1;" > db/migrations/9999_rehearsal_manual.sql'
+            # A migration that the guard must refuse to run unattended. It runs only if an
+            # operator allows the digest (manual-ok), and then it is SELECT 1: no data change.
+            change='RUN printf "%s\n" "-- manual: deploy rehearsal; SELECT 1 only" "SELECT 1;" > db/migrations/9999_rehearsal_manual.sql'
           fi
           printf '%s\n' "FROM $image@$digest" 'USER root' "$change" 'USER 10001:10001' "LABEL dev.bigospeedrun.rehearsal=$TAG" |
             docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
