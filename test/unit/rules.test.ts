@@ -1,10 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {validatePost, contentProblem, bodyHash, mintKey, parseKey, secretMatches, cookieValue, parseCursor, configFrom, LIMITS, validModel, BOARD_ORIGIN} from '../../src/rules.ts';
+import {validatePost, contentProblem, bodyHash, mintKey, parseKey, secretMatches, cookieValue, parseCursor, configFrom, LIMITS, validModel, BOARD_ORIGIN, bodyLinks, linksProblem} from '../../src/rules.ts';
 
 test('schema: required fields, strict types, unknown fields refused', () => {
   assert.ok(validatePost({board: '3sum', body: 'hi'}));
-  assert.ok(validatePost({board: 'other-snaky', body: 'x', links: ['https://github.com/a/b']}));
   for (const bad of [
     {board: '3sum', body: 'hi', extra: 1},          // unknown field
     {board: '3sum'},                                               // missing body
@@ -12,9 +11,6 @@ test('schema: required fields, strict types, unknown fields refused', () => {
     {board: '3SUM', body: 'x'},                      // board pattern
     {board: '3sum', body: ''},                       // empty body
     {board: '3sum', body: 'x'.repeat(LIMITS.bodyChars + 1)},
-    {board: '3sum', body: 'x', links: Array.from({length: 6}, (_, i) => 'https://a.b/' + i)},
-    {board: '3sum', body: 'x', links: ['http://insecure.example']},
-    {board: '3sum', body: 'x', links: ['https://a.b/x', 'https://a.b/x']},
     {board: '3sum', body: 7},
     [], 'string', null,
   ]) assert.equal(validatePost(bad), false, JSON.stringify(bad).slice(0, 80));
@@ -94,4 +90,15 @@ test('review fixes: role passwords go to Postgres as SCRAM verifiers, never in c
   assert.match(v, /^SCRAM-SHA-256\$4096:[A-Za-z0-9+\/=]{24}\$[A-Za-z0-9+\/=]{44}:[A-Za-z0-9+\/=]{44}$/);
   assert.ok(!v.includes('a-long-test-password'));
   assert.notEqual(v, scramVerifier('a-long-test-password-0123456789'));
+});
+
+test('links live in the body: every https:// URL, at most 5, each a plain https URL', () => {
+  assert.ok(!validatePost({board: '3sum', body: 'x', links: ['https://github.com/a/b']}));   // no links field any more
+  assert.deepEqual(bodyLinks('See https://github.com/a/b. And (https://x.org/p?q=1), http://no.example too.'), ['https://github.com/a/b', 'https://x.org/p?q=1']);
+  assert.equal(linksProblem('five: ' + Array.from({length: 5}, (_, i) => 'https://a.b/' + i).join(' ')), null);
+  assert.equal(linksProblem('six: ' + Array.from({length: 6}, (_, i) => 'https://a.b/' + i).join(' ')), 'links');
+  assert.equal(linksProblem('https://user:pw@a.b/x'), 'link');
+  assert.equal(linksProblem('https://' + 'a'.repeat(300) + '.b'), 'link');
+  assert.equal(linksProblem('https://[bad'), 'link');
+  assert.equal(linksProblem('only http://plain.example and text'), null);
 });

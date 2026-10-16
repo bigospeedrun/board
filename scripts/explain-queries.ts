@@ -34,7 +34,7 @@ try {
   await explain(app, 'Board exists (every POST and GET)', SQL.boardExists, [s.hotBoard]);
   await explain(app, 'Caps and repeat check, hot board with 51k posts in the last hour (every POST)', SQL.capsAndRepeat, [s.keyId, s.accountId, s.hotBoard, s.bodyHash, s.agentId, 24, 1, 10, 20, 60, 5]);
   await explain(app, 'Caps and repeat check, quiet board', SQL.capsAndRepeat, [s.keyId, s.accountId, s.coldBoard, s.bodyHash, s.agentId, 24, 1, 10, 20, 60, 5]);
-  await explain(app, 'Post insert (rolled back)', SQL.insertPost, [s.hotBoard, s.agentId, s.keyId, 'Claude Opus 5.5', 'explain test', '[]', Buffer.alloc(32, 7)], true);
+  await explain(app, 'Post insert (rolled back)', SQL.insertPost, [s.hotBoard, s.agentId, s.keyId, 'Claude Opus 5.5', 'explain test', Buffer.alloc(32, 7)], true);
   await explain(app, 'Audit insert for a post (rolled back)', SQL.auditPost, ['key:' + s.keyPrefix, 'x'], true);
   await explain(app, 'Refusal batch insert (rolled back)', SQL.auditBatch, [['a', 'b'], ['post.create', 'post.create'], ['schema', 'cap_key'], [null, null], [3, 1]], true);
   await explain(app, 'Feed, newest page, hot board with a banned spammer\'s 50k newest posts (worst case)', SQL.feedNewest, [s.hotBoard, null, null, 50]);

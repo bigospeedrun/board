@@ -1,7 +1,7 @@
 // HTML pages of the board host, rendered on the server with the site's look. Visitor
 // text comes only from src/strings.ts. Posts are never put into this HTML: the board page
-// loads them from GET /board/api/posts and public/board.js sets them as text (math by
-// KaTeX). Pages:
+// loads them from GET /board/api/posts and public/board.js sets them as text, with https://
+// URLs as links (and math by KaTeX when RENDER_MATH is on). Pages:
 //   GET /board/            the list of boards                          (board-api)
 //   GET /board/<slug>      one board: its posts and, signed in, a form (board-api)
 //   GET /board/auth/...    sign-in, account and keys                   (board-auth)
@@ -12,6 +12,11 @@ import {fileURLToPath} from 'node:url';
 import {STRINGS, t, type StringKey} from './strings.ts';
 
 export const SITE = 'https://bigospeedrun.com';
+// Math in posts (Nil, 2026-10-15 ~9:20 PM PT: off until he says otherwise). Off: posts show
+// $...$ as plain text, and no page loads KaTeX's CSS, script or fonts. On: board.js renders
+// $...$ and $$...$$ with KaTeX (trust off). The KaTeX files are still served, so turning it
+// back on is this one constant (and the form help string, if wanted).
+export const RENDER_MATH = false;
 export interface BoardInfo {slug: string; title: string}
 export interface KeyView {prefix: string; label: string; createdAt: string; revoked: boolean}
 
@@ -94,8 +99,7 @@ export function boardPage(board: BoardInfo, signedIn: boolean) {
   // Closed by default, so the posts come first; one click opens the form.
   const form = signedIn ? `<details class="panel post-form"><summary>${tt('form_heading')}</summary>
 <form id="post-form" novalidate><label for="post-body">${tt('form_body')}</label><textarea id="post-body" name="body" rows="6" maxlength="4000" required></textarea>
-<p class="small">${tt('form_body_help')} <code>$O(n^2 / \\log n)$</code></p>
-<label for="post-links">${tt('form_links')}</label><textarea id="post-links" name="links" rows="2"></textarea>
+<p class="small">${tt('form_body_help')}</p>
 <p class="small">${tt('form_public')}</p><div class="form-actions"><button type="submit">${tt('form_submit')}</button><p id="post-status" class="small" role="status"></p></div></form></details>`
     : `<p class="sign-in-line"><a href="/board/auth/login">${tt('form_signed_out')}</a> ${tt('form_agents')}</p>`;
   return layout(t('board_title', {title: board.title}), `<h1>${tt('board_title', {title: board.title})}</h1>
@@ -103,7 +107,7 @@ export function boardPage(board: BoardInfo, signedIn: boolean) {
 <p class="board-links"><a href="${esc(recordsUrl(board.slug))}">${tt('board_records_link', {title: board.title})}</a><a href="${esc(feed)}">${tt('board_feed_link')}</a></p>
 ${form}
 <section id="posts" data-board="${esc(board.slug)}"><p id="posts-status" class="small" role="status">${tt('board_loading')}</p><ol class="posts"></ol><button id="older" type="button" hidden>${tt('board_older')}</button></section>
-<noscript><p>${tt('board_noscript')} <a href="${esc(feed)}">${tt('board_feed_link')}</a></p></noscript>`, {signedIn, katex: true, data: {board: board.slug}});
+<noscript><p>${tt('board_noscript')} <a href="${esc(feed)}">${tt('board_feed_link')}</a></p></noscript>`, {signedIn, katex: RENDER_MATH, data: {board: board.slug, renderMath: RENDER_MATH}});
 }
 
 export const notFoundPage = (signedIn: boolean) =>

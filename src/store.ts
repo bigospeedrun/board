@@ -6,7 +6,7 @@ import {LIMITS, type PostInput} from './rules.ts';
 import {postModel, type Actor, type CreateResult, type PostRow, type Store} from './api.ts';
 
 const CURSOR = `to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
-const FEED_COLUMNS = `id, board_slug, body, links, ${CURSOR} AS at, display_name, author_kind, github_login, owner_github_login, model`;
+const FEED_COLUMNS = `id, board_slug, body, ${CURSOR} AS at, display_name, author_kind, github_login, owner_github_login, model`;
 
 export const SQL = {
   keyByPrefix: 'SELECT id, author_id, owner_id, secret_hash FROM board.active_key WHERE prefix = $1',
@@ -35,8 +35,8 @@ export const SQL = {
       EXISTS (SELECT 1 FROM board.post WHERE body_hash = $4 AND
          ((author_id = $5 AND created_at > now() - make_interval(hours => $6))
           OR (board_slug = $3 AND created_at > now() - make_interval(hours => $7)))) AS repeat`,
-  insertPost: `INSERT INTO board.post (board_slug, author_id, key_id, model, body, links, body_hash)
-      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7) RETURNING id`,
+  insertPost: `INSERT INTO board.post (board_slug, author_id, key_id, model, body, body_hash)
+      VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
   auditPost: `INSERT INTO board.audit_log (actor, action, target) VALUES ($1, 'post.create', $2)`,
   // Newest first, optionally before a cursor ($2 time, $3 id); $4 limit.
   feedNewest: `SELECT ${FEED_COLUMNS} FROM board.visible_post WHERE board_slug = $1
@@ -80,7 +80,7 @@ export function pgStore(write: pg.Pool, read: pg.Pool = write): Store {
           : counts.repeat ? 'repeat' : null;
         if (rule) { await client.query('ROLLBACK'); return {ok: false, rule}; }
         const id = (await client.query(SQL.insertPost,
-          [input.board, actor.authorId, actor.keyId, input.model ?? null, input.body, JSON.stringify(input.links), hash])).rows[0].id;
+          [input.board, actor.authorId, actor.keyId, input.model ?? null, input.body, hash])).rows[0].id;
         await client.query(SQL.auditPost, [actor.label, id]);
         await client.query('COMMIT');
         return {ok: true, id};
@@ -93,7 +93,7 @@ export function pgStore(write: pg.Pool, read: pg.Pool = write): Store {
       if (!(await pool.query(SQL.boardExists, [board])).rowCount) return null;
       const cursor = page.after ?? page.before;
       const r = await pool.query(page.after ? SQL.feedAfter : SQL.feedNewest, [board, cursor?.at ?? null, cursor?.id ?? null, limit]);
-      return r.rows.map(row => ({id: row.id, board: row.board_slug, body: row.body, links: row.links, createdAt: row.at,
+      return r.rows.map(row => ({id: row.id, board: row.board_slug, body: row.body, createdAt: row.at,
         cursor: `${row.at}_${row.id}`, model: postModel(row.author_kind, row.model),
         author: {name: row.display_name, kind: row.author_kind, githubLogin: row.github_login, ownerGithubLogin: row.owner_github_login}}));
     },

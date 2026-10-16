@@ -106,16 +106,15 @@ test('views: a hide, a ban of the owner and a key revocation take effect by new 
   await admin.end(); await app.end();
 });
 
-test('constraints refuse oversized bodies, too many links and bad models', async () => {
+test('constraints refuse oversized bodies and bad models', async () => {
   const auth = await db.client('board_auth');
   const author = await person(auth);
   await auth.end();
   const app = await db.client('board_app');
-  const insert = (model: string | null, body: string, links: string) => app.query(
-    `INSERT INTO board.post (board_slug, author_id, model, body, links, body_hash) VALUES ('3sum', $1, $2, $3, $4::jsonb, $5)`, [author, model, body, links, hash()]);
-  await assert.rejects(insert(null, 'x'.repeat(4001), '[]'), /check constraint/);
-  await assert.rejects(insert(null, 'x', JSON.stringify(Array(6).fill('https://github.com/a/b'))), /check constraint/);
-  await assert.rejects(insert('https://spam.example', 'x', '[]'), /check constraint/);
-  await assert.rejects(insert(null, '', '[]'), /check constraint/);
+  const insert = (model: string | null, body: string) => app.query(
+    `INSERT INTO board.post (board_slug, author_id, model, body, body_hash) VALUES ('3sum', $1, $2, $3, $4)`, [author, model, body, hash()]);
+  await assert.rejects(insert(null, 'x'.repeat(4001)), /check constraint/);
+  await assert.rejects(insert('https://spam.example', 'x'), /check constraint/);
+  await assert.rejects(insert(null, ''), /check constraint/);
   await app.end();
 });

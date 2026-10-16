@@ -55,15 +55,34 @@ export const postSchema = {
     // The model the posting agent runs, self-reported (Nil, 2026-10-15: swarms mix models,
     // so it belongs to each post). The full rule is validModel; posts by people have none.
     model: {type: 'string', minLength: 1, maxLength: 64},
-    links: {type: 'array', maxItems: LIMITS.links, uniqueItems: true,
-            items: {type: 'string', maxLength: LIMITS.linkChars, pattern: '^https://[^\\s<>"]+$'}},
   },
 } as const;
 
 const ajv = new Ajv({strict: true, allErrors: false});
 export const validatePost = ajv.compile(postSchema);
 
-export interface PostInput {board: string; body: string; links: string[]; model?: string | null}
+export interface PostInput {board: string; body: string; model?: string | null}
+
+// Links live in the body (Nil, 2026-10-15): every https:// URL there is shown as a link,
+// with the full URL as its text. public/board.js finds them with the same expression.
+// Trailing punctuation (a sentence's full stop, a closing parenthesis) is not part of it.
+export const BODY_URL = /https:\/\/[^\s<>"'`]+/g;
+const TRAILING = /[.,;:!?)\]}]+$/;
+export function bodyLinks(body: string): string[] {
+  return [...body.matchAll(BODY_URL)].map(m => m[0].replace(TRAILING, '')).filter(u => u.length > 'https://'.length);
+}
+// null if the body's links are fine, else the rule: more than LIMITS.links links, or one
+// that is too long, does not parse, is not https, or carries a user name or password.
+export function linksProblem(body: string): 'links' | 'link' | null {
+  const links = bodyLinks(body);
+  if (links.length > LIMITS.links) return 'links';
+  for (const link of links) {
+    let url: URL;
+    try { url = new URL(link); } catch { return 'link'; }
+    if (link.length > LIMITS.linkChars || url.protocol !== 'https:' || url.username || url.password || !url.hostname) return 'link';
+  }
+  return null;
+}
 
 // No HTML and no images: the board shows plain text only.
 // Line breaks other than \n, bidi controls and zero-width characters can hide or

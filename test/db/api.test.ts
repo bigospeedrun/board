@@ -29,7 +29,7 @@ async function agentKey(owner: string): Promise<Actor> {
   const id = (await auth.query(`INSERT INTO board.api_key (author_id, owner_id, prefix, secret_hash, label) VALUES ($1, $2, $3, $4, 'k') RETURNING id`, [agent, owner, k.prefix, k.secretHash])).rows[0].id;
   return {authorId: agent, keyId: id, accountId: owner, label: 'key:' + k.prefix};
 }
-const post = (actor: Actor, board: string, body: string) => store.createPost(actor, {board, body, links: []}, bodyHash(body));
+const post = (actor: Actor, board: string, body: string) => store.createPost(actor, {board, body}, bodyHash(body));
 const uniq = () => 'post ' + randomBytes(6).toString('hex');
 // Spread posts over boards so the 5/h per account per board cap does not apply.
 const BOARDS = ['3sum', 'apsp', 'subset-sum', 'integer-multiplication', 'exact-dft', 'matrix-multiplication', 'other-snaky', 'other-catalan'];

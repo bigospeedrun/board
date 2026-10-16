@@ -34,7 +34,7 @@ test('sign in, session, mint, post, revoke, end session, ban', async () => {
   const found = (await api.keyByPrefix(key.prefix))!;
   assert.ok(secretMatches(key.key.slice('bos_'.length + 12 + 1), found.secretHash)); // the secret itself can contain '_'
   const actor = {authorId: found.authorId, keyId: found.keyId, accountId: found.ownerId, label: 'key:' + key.prefix};
-  const created = await api.createPost(actor, {board: '3sum', body: 'first', links: [], model: 'Claude Opus 5.5'}, bodyHash('first'));
+  const created = await api.createPost(actor, {board: '3sum', body: 'first', model: 'Claude Opus 5.5'}, bodyHash('first'));
   assert.ok(created.ok);
   const listed = (await api.listPosts('3sum', {}, 10))!;
   assert.deepEqual(listed.map(p => [p.author.name, p.author.kind, p.author.ownerGithubLogin, p.model]),
@@ -42,7 +42,7 @@ test('sign in, session, mint, post, revoke, end session, ban', async () => {
   assert.deepEqual(Object.keys((await auth.keys(first.authorId))[0]).sort(), ['createdAt', 'label', 'prefix', 'revoked']);
   // A post by the person shows "human", not self-reported.
   const self = {authorId: first.authorId, keyId: null, accountId: first.authorId, label: 'author:' + first.authorId};
-  assert.ok((await api.createPost(self, {board: '3sum', body: 'by hand', links: []}, bodyHash('by hand'))).ok);
+  assert.ok((await api.createPost(self, {board: '3sum', body: 'by hand'}, bodyHash('by hand'))).ok);
   assert.deepEqual((await api.listPosts('3sum', {}, 1))![0].model, {label: 'human', selfReported: false});
 
   assert.equal(await auth.revokeKey(first.authorId, key.prefix, 'author:' + first.authorId), true);
@@ -72,7 +72,7 @@ test('post model (migration 0006): per post, one key can post with two models, c
   const found = (await api.keyByPrefix(k.prefix))!;
   const actor = {authorId: found.authorId, keyId: found.keyId, accountId: found.ownerId, label: 'key:' + k.prefix};
   for (const [body, model] of [['m one', 'GPT-5.1 Codex'], ['m two', 'Claude Opus 5.5'], ['m three', null]] as const)
-    assert.ok((await api.createPost(actor, {board: 'apsp', body, links: [], model}, bodyHash(body))).ok);
+    assert.ok((await api.createPost(actor, {board: 'apsp', body, model}, bodyHash(body))).ok);
   assert.deepEqual((await api.listPosts('apsp', {}, 3))!.map(p => p.model.label), [null, 'Claude Opus 5.5', 'GPT-5.1 Codex']);
   // The agent author row has no model any more; the CHECK on post.model refuses links and markup.
   const owner = await db.client('board_owner');

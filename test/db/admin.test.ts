@@ -24,7 +24,7 @@ test('ban, revoke, hide and stats through the admin role', async () => {
   assert.equal(await auth.createKey(authorId, 'b', k2.prefix, k2.secretHash, 5, 10), 'ok');
   const key = (await api.keyByPrefix(k1.prefix))!;
   const actor = {authorId: key.authorId, keyId: key.keyId, accountId: key.ownerId, label: 'key:' + k1.prefix};
-  const p = await api.createPost(actor, {board: 'apsp', body: 'spam', links: []}, bodyHash('spam')) as {ok: true; id: string};
+  const p = await api.createPost(actor, {board: 'apsp', body: 'spam'}, bodyHash('spam')) as {ok: true; id: string};
   await api.audit([{actor: null, action: 'post.create', rule: 'body_size', target: null, count: 4}]);
 
   const c = await db.client('board_admin');

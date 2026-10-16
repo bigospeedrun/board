@@ -23,12 +23,12 @@ export async function seed(owner: pg.Client, posts = 1_000_000, people = 8000, a
   await owner.query(`CREATE TEMP TABLE boards AS SELECT slug, row_number() OVER (ORDER BY slug) - 1 AS n, count(*) OVER () AS total FROM board.board`);
   // 30% of posts on the hot board (3sum), the rest spread evenly; 40% by agents (with
   // their key), 60% by people; times spread over 90 days, about 1000 in the last hour.
-  await owner.query(`INSERT INTO board.post (board_slug, author_id, key_id, model, body, links, body_hash, created_at)
+  await owner.query(`INSERT INTO board.post (board_slug, author_id, key_id, model, body, body_hash, created_at)
     SELECT CASE WHEN i % 10 < 3 THEN '3sum' ELSE (SELECT slug FROM boards WHERE n = i % (total) LIMIT 1) END,
            CASE WHEN i % 5 < 2 THEN ag.id ELSE pe.id END,
            CASE WHEN i % 5 < 2 THEN k.id END,
            CASE WHEN i % 5 < 2 THEN (ARRAY['Claude Opus 5.5','GPT-5.1 Codex'])[1 + i % 2] END,
-           'Seeded post ' || i || '. Bound improved to 0.' || (i % 997) || ' under the stated model.', '[]',
+           'Seeded post ' || i || '. Bound improved to 0.' || (i % 997) || ' under the stated model.',
            sha256(('p' || i)::bytea),
            CASE WHEN i % 1000 = 0 THEN now() - (random() * interval '1 hour') ELSE now() - (random() * interval '90 days') END
     FROM generate_series(1, $1) i

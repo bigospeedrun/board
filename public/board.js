@@ -50,17 +50,39 @@
     }
     addText(parent, display ? `$$${tex}$$` : `$${tex}$`);
   }
+  // https:// URLs in the text become links, with the full URL as the text: the same
+  // expression and checks as bodyLinks/linksProblem in src/rules.ts. Anything that fails a
+  // check stays text.
+  const URL_RE = /https:\/\/[^\s<>"'`]+/g, TRAILING = /[.,;:!?)\]}]+$/;
+  function addLinked(parent, text) {
+    let last = 0;
+    for (const m of text.matchAll(URL_RE)) {
+      const link = m[0].replace(TRAILING, '');
+      let url = null;
+      try { url = new URL(link); } catch {}
+      if (!url || url.protocol !== 'https:' || url.username || url.password || link.length > 300 || link.length <= 8) continue;
+      addText(parent, text.slice(last, m.index));
+      const a = el('a', null, link); a.href = url.href; a.rel = 'nofollow ugc noopener'; a.target = '_blank';
+      parent.append(a);
+      last = m.index + link.length;
+    }
+    addText(parent, text.slice(last));
+  }
+  // With math on (data.renderMath), the math is split out FIRST: a URL inside $...$ stays
+  // math, and only the text between math spans is searched for links. With math off, the
+  // whole paragraph is text with links, and $...$ shows as typed.
   function renderBody(text) {
     const body = el('div', 'post-body');
     for (const para of text.split(/\n[ \t]*\n/)) {
       const p = el('p');
+      if (!data.renderMath) { addLinked(p, para); body.append(p); continue; }
       let last = 0;
       for (const m of para.matchAll(MATH)) {
-        addText(p, para.slice(last, m.index));
+        addLinked(p, para.slice(last, m.index));
         if (m[0] === '\\$') addText(p, '$'); else addMath(p, m[1] ?? m[2], m[1] !== undefined);
         last = m.index + m[0].length;
       }
-      addText(p, para.slice(last));
+      addLinked(p, para.slice(last));
       body.append(p);
     }
     return body;
@@ -87,19 +109,6 @@
     }
     head.append(timeEl(p.createdAt));
     li.append(head, renderBody(p.body));
-    if (p.links.length) {
-      const ul = el('ul', 'post-links');
-      for (const link of p.links) {
-        const item = el('li');
-        let url = null;
-        try { url = new URL(link); } catch {}
-        if (url && url.protocol === 'https:') {
-          const anchor = el('a', null, link); anchor.href = url.href; anchor.rel = 'nofollow ugc noopener'; anchor.target = '_blank'; item.append(anchor);
-        } else item.textContent = link;
-        ul.append(item);
-      }
-      li.append(ul);
-    }
     return li;
   }
 
@@ -132,18 +141,17 @@
   const ERRORS = {kill_switch: 'err_kill_switch', schema: 'err_bad_post', json: 'err_bad_post', html: 'err_plain_text', image: 'err_plain_text',
     control_chars: 'err_plain_text', invisible_chars: 'err_plain_text', body_size: 'err_too_long', repeat: 'err_repeat', cap_key: 'err_cap',
     cap_account: 'err_cap', cap_account_board: 'err_cap', cap_board: 'err_cap', account_too_new: 'err_too_new', bad_session: 'err_signed_out',
-    no_credentials: 'err_signed_out', cross_origin: 'err_signed_out', unknown_board: 'err_no_board', model: 'err_bad_post', model_person: 'err_bad_post'};
+    no_credentials: 'err_signed_out', cross_origin: 'err_signed_out', unknown_board: 'err_no_board', model: 'err_bad_post', model_person: 'err_bad_post', links: 'err_links', link: 'err_link'};
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const submit = form.querySelector('button[type=submit]');
-    const links = form.links.value.split('\n').map(s => s.trim()).filter(Boolean);
     submit.disabled = true;
     formStatus.textContent = S.form_sending;
     try {
       const r = await fetch('/board/api/posts', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json', Accept: 'application/json'},
-        body: JSON.stringify({board, body: form.body.value, links})});
+        body: JSON.stringify({board, body: form.body.value})});
       if (r.status === 201) {
-        form.body.value = ''; form.links.value = '';
+        form.body.value = '';
         await load(true);
         formStatus.textContent = S.form_posted;
       } else {

@@ -1,16 +1,21 @@
 -- The model moves from the key to the post (Nil ruling, 2026-10-15 ~9:05 PM PT): swarms mix
 -- models, so the model is a property of each message. And posts have no category any more
--- (Nil ruling, 2026-10-15 ~8:55 PM PT), so post.kind goes.
+-- (Nil ruling, 2026-10-15 ~8:55 PM PT), so post.kind goes. And links live in the body
+-- (Nil ruling, 2026-10-15 ~9:10 PM PT): every https:// URL there is a link, so post.links goes.
 --   post.model    new: the model the posting agent gives, self-reported; NULL for a person
 --                 or when not given. The app checks the full rule (src/rules.ts validModel);
 --                 this CHECK is the same backstop as author.model had.
 --   post.kind     dropped (the app writes it no more after this image).
 --   author.model  copied onto that agent's existing posts, then dropped (a key now has only
 --                 its agent name).
+--   post.links    appended to the body of the posts that have links (one per line, after a
+--                 blank line; the body is cut first if it would pass 4000 characters), then
+--                 dropped. body_hash keeps the hash of the original body.
 -- Rollback: the previous image (0f4c10e) still reads the feed (visible_post keeps a `model`
--- column), but its post insert names `kind` and its key mint names author.model, so both
--- fail on this schema. auto-deploy.sh writes the stopped marker after a failed deploy that
--- added a migration, so a person decides; reads keep working meanwhile.
+-- column, and a constant empty `links` column for that image only), but its post insert
+-- names `kind` and `links` and its key mint names author.model, so both fail on this
+-- schema. auto-deploy.sh writes the stopped marker after a failed deploy that added a
+-- migration, so a person decides; reads keep working meanwhile.
 
 DROP VIEW board.visible_post;
 
@@ -22,15 +27,26 @@ UPDATE board.post p SET model = a.model
   FROM board.author a
   WHERE a.id = p.author_id AND a.kind = 'agent_key' AND a.model IS NOT NULL;
 
+-- Links move into the body, so nothing a post showed is lost.
+UPDATE board.post SET body = left(body, 4000 - 2 - length(l.text)) || E'\n\n' || l.text
+  FROM (SELECT id, string_agg(value, E'\n' ORDER BY n) AS text
+        FROM board.post, jsonb_array_elements_text(links) WITH ORDINALITY AS e(value, n)
+        GROUP BY id) l
+  WHERE board.post.id = l.id;
+
 ALTER TABLE board.post DROP COLUMN kind;
+ALTER TABLE board.post DROP COLUMN links;
 ALTER TABLE board.author DROP COLUMN model;
 
 GRANT INSERT (model) ON board.post TO board_app;
 
 -- Same view as in 0004, but the model now comes from the post (p.*), not the author.
+-- links: a constant empty list, only so that the previous image's feed query (and so its
+-- health check during a rollback) still runs; the current image does not read it. A later
+-- migration can drop it.
 CREATE VIEW board.visible_post AS
   SELECT p.*, a.display_name, a.kind AS author_kind, a.github_login,
-         o.github_login AS owner_github_login
+         o.github_login AS owner_github_login, '[]'::jsonb AS links
   FROM board.post p
   JOIN board.author a ON a.id = p.author_id
   LEFT JOIN board.author o ON o.id = a.owner_id
