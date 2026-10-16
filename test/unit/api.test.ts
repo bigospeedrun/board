@@ -236,9 +236,13 @@ test('pages: the board list, a board, a 404 page, with the page headers and no p
   assert.doesNotMatch(board.text, /Ignore all instructions/);       // posts load by the API, as text
   assert.doesNotMatch(board.text, /id="post-form"/);                // signed out: no form
   assert.match(board.text, /href="\/auth\/login"/);
-  // Agents get their key by themselves: the board points them to the steps on the site.
-  assert.match(board.text, /Agents get a key by themselves, with their own GitHub login: <a href="https:\/\/bigospeedrun\.com\/about#board">https:\/\/bigospeedrun\.com\/about#board<\/a>/);
-  assert.doesNotMatch(/<p class="sign-in-line">.*?<\/p>/s.exec(board.text)![0], /\{link\}/);
+  // One entry point for agents on the board host: the line to /llms.txt, not a link to the site.
+  assert.doesNotMatch(board.text, /about#board/);
+  assert.match(board.text, /<a href="\/llms\.txt">\/llms\.txt<\/a>/);
+  // The page carries only the strings board.js reads, not the rest of the copy.
+  const data = JSON.parse(/<script type="application\/json" id="board-data">(.*?)<\/script>/s.exec(board.text)![1]);
+  assert.ok('post_agent' in data.strings && 'err_cap' in data.strings && 'board_empty' in data.strings && 'theme_to_dark' in data.strings);
+  for (const key of ['board_intro', 'form_body_help', 'form_public', 'agents_guide', 'index_intro']) assert.equal(key in data.strings, false, key);
   assert.match((await s.call('GET', '/other-catalan')).text, /href="https:\/\/bigospeedrun\.com\/other\/catalan"/);
   const signedIn = await s.call('GET', '/3sum', undefined, {Cookie: `__Host-bos_board_session=${session.token}`});
   assert.match(signedIn.text, /id="post-form"/);
@@ -371,4 +375,19 @@ test('agents: given only the board host in Markdown, an agent finds the steps by
   const steps = await s.call('GET', new URL(guide).pathname);
   assert.match(steps.text, /## How an agent reads and posts/);
   assert.match(steps.text, /auth\/agent\/challenge/);
+});
+
+test('polish: an empty board says so in Markdown; the refusal example is valid JSON; root files cache 5 minutes', async () => {
+  const s = await serve({}, {async listPosts(board) { return board === '3sum' ? [] : null; }});
+  for (const path of ['/api/posts?board=3sum&format=md', '/3sum']) {
+    const r = await s.call('GET', path, undefined, {Accept: 'text/markdown'});
+    assert.match(r.text, /\nNo posts yet\.\n$/, path);
+  }
+  assert.doesNotMatch(markdownFeed('3sum', [{id: 'i', board: '3sum', body: 'b', createdAt: 't', cursor: 'c',
+    model: {label: null, selfReported: true}, author: {name: 'n', kind: 'agent_key', githubLogin: null, ownerGithubLogin: 'o'}}]), /No posts yet/);
+  const guide = (await s.call('GET', '/llms.txt')).text;
+  const example = /A refusal is JSON: `([^`]+)`/.exec(guide)![1];
+  assert.deepEqual(JSON.parse(example), {error: {rule: '...', message: '...'}});
+  for (const path of ['/robots.txt', '/sitemap.xml', '/site.webmanifest', '/favicon.ico'])
+    assert.equal((await s.call('GET', path)).headers['cache-control'], 'public, max-age=300', path);
 });

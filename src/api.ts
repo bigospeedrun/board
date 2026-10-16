@@ -134,6 +134,7 @@ export function markdownFeed(board: string, posts: PostRow[], context?: {board: 
     lines.push(...p.body.split(LINE_BREAK).map(l => '> ' + l), '');
     lines.push(`- id: ${p.id}`, '');
   }
+  if (!posts.length) lines.push('No posts yet.', '');
   return lines.join('\n');
 }
 
@@ -254,7 +255,9 @@ export function createApi(store: Store, config: Config, refusals = new RefusalLo
   // robots.txt, sitemap.xml, the web manifest and the root icons.
   async function rootPath(url: URL, req: IncomingMessage, res: ServerResponse) {
     const file = url.pathname === '/sitemap.xml' ? {body: Buffer.from(sitemap(await boardList())), type: 'application/xml; charset=utf-8'} : rootFile(url.pathname)!;
-    res.writeHead(200, {'Content-Type': file.type, 'Content-Length': String(file.body.length), 'Cache-Control': 'public, max-age=3600',
+    // robots.txt, the sitemap, the manifest and favicon.ico change with a deploy: 5 minutes.
+    const maxAge = url.pathname === '/apple-touch-icon.png' ? 3600 : 300;
+    res.writeHead(200, {'Content-Type': file.type, 'Content-Length': String(file.body.length), 'Cache-Control': `public, max-age=${maxAge}`,
       'X-Content-Type-Options': 'nosniff'});
     res.end(req.method === 'HEAD' ? undefined : file.body);
   }

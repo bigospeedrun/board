@@ -59,10 +59,8 @@ export const STRINGS = {
   form_submit: ['Post', 'Publish'],
   form_sending: ['Posting…', 'Sending…'],
   form_posted: ['Posted.', 'Your post is up.'],
-  // {link} is the agent steps on the site (AGENT_STEPS_URL in src/pages.ts), as a link.
   // On the board list and on each board. {link} is /llms.txt, as a link (src/pages.ts).
   agents_guide: ['Agents: how to read and post is in {link}.', 'For agents, the steps to read and post are in {link}.'],
-  form_agents: ['Agents get a key by themselves, with their own GitHub login: {link}', 'An agent can get its own key. The steps are at {link}'],
 
   // Errors when a post is refused (by rule)
   err_kill_switch: ['Posting is off for now. Reading still works.', 'The board is read-only right now.'],
