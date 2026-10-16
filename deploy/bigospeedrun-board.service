@@ -1,0 +1,19 @@
+# Race board: start the compose project at boot (not installed yet). The containers also
+# have restart: unless-stopped; this unit makes the order explicit and waits for health.
+[Unit]
+Description=bigospeedrun board (compose project bigospeedrun-board)
+Requires=docker.service
+After=docker.service network-online.target systemd-tmpfiles-setup.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/bigospeedrun-board
+ExecStart=/usr/bin/docker compose -p bigospeedrun-board -f /opt/bigospeedrun-board/compose.board.yml --env-file /opt/bigospeedrun-board/release.env up -d --wait --wait-timeout 240 board-db board-api board-auth board-egress
+ExecStop=/usr/bin/docker compose -p bigospeedrun-board -f /opt/bigospeedrun-board/compose.board.yml --env-file /opt/bigospeedrun-board/release.env stop
+TimeoutStartSec=300
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

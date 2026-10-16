@@ -1,0 +1,10 @@
+# Race board: run the automatic deploy five minutes after the last tick ends (not installed yet).
+[Unit]
+Description=Deploy the bigospeedrun board from its GHCR main tag every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=5min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,13 @@
+# Race board: one tick of the automatic deploy (auto-deploy.sh; not installed yet).
+# Installed by hand once; after that auto-deploy.sh keeps this file equal to the copy
+# beside it in /opt/bigospeedrun-board/ops.
+[Unit]
+Description=Deploy the bigospeedrun board when its GHCR main tag moves
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/bigospeedrun-board/ops/auto-deploy.sh
+# A pull, a pre-migration dump, the swap and its checks, and a rollback with its checks.
+TimeoutStartSec=15min

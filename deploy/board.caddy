@@ -1,8 +1,10 @@
 # Race board routes for the board's own host (phase E; not deployed). The board is not
-# under the site host: import this file as the whole site block of board.bigospeedrun.com:
+# under the site host. On the VPS this file is /etc/wg-caddy/board-routes.caddy, and the
+# site block deploy/board.site.caddy (/etc/wg-caddy/board.caddy) imports it:
 #
 #   board.bigospeedrun.com {
-#   	import /etc/caddy/sites/board.caddy
+#   	...
+#   	import /etc/wg-caddy/board-routes.caddy
 #   }
 #
 # Only the three public endpoints pass; every other path and method on this host is 404.

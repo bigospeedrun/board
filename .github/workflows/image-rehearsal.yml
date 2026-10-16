@@ -1,0 +1,75 @@
+# Board deploy rehearsal images (phase E): run by hand. They never move the main tag.
+#   rehearsal-good    the image main points to now (the same digest)
+#   rehearsal-bad     that image with a board-api that exits at once, so a deploy of it
+#                     must roll back by itself
+#   rehearsal-manual  that image with one more migration marked `-- manual`, so the
+#                     migration guard must stop with manual_deploy_needed
+# The VPS follows one of them when BOARD_TAG names it in
+# /etc/bigospeedrun/board-auto-deploy.env.
+name: Push a board rehearsal image
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Rehearsal tag to push (main is never changed)
+        type: choice
+        options: [rehearsal-good, rehearsal-bad, rehearsal-manual]
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: board-image-rehearsal
+  cancel-in-progress: false
+env:
+  IMAGE_OWNER: bigospeedrun
+  IMAGE_NAME: board
+jobs:
+  rehearsal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - name: Accept only the rehearsal tags
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          case "$TAG" in
+            rehearsal-good|rehearsal-bad|rehearsal-manual) ;;
+            *) echo "Not a rehearsal tag: $TAG"; exit 1 ;;
+          esac
+      - name: Copy the main image to rehearsal-good
+        if: inputs.tag == 'rehearsal-good'
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        run: node scripts/image-registry.mjs retag main rehearsal-good
+      - name: Build rehearsal-bad or rehearsal-manual from the main image
+        if: inputs.tag != 'rehearsal-good'
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          image="ghcr.io/$IMAGE_OWNER/$IMAGE_NAME"
+          digest=$(node scripts/image-registry.mjs digest main)
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+          # One layer on the exact main digest, with the same commit label.
+          if [ "$TAG" = rehearsal-bad ]; then
+            # board-api exits at once, so `compose up --wait` fails and auto-deploy.sh rolls back.
+            change='RUN echo "process.exit(1);" > src/board-api.ts'
+          else
+            # A migration that the guard must refuse to run unattended. It is never applied.
+            change='RUN printf "%s\n" "-- manual: deploy rehearsal; never applied" "SELECT 1;" > db/migrations/9999_rehearsal_manual.sql'
+          fi
+          printf '%s\n' "FROM $image@$digest" 'USER root' "$change" 'USER 10001:10001' "LABEL dev.bigospeedrun.rehearsal=$TAG" |
+            docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+              -t "$image:$TAG" --push -
+          docker logout ghcr.io

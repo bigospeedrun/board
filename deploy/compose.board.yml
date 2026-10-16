@@ -1,5 +1,10 @@
-# Race board compose fragment (phase E). Nil ruling 2026-10-15: one narrow boxed path.
-# Include it in the bigospeedrun compose project on the VPS (not deployed yet).
+# Race board compose project (phase E). Nil ruling 2026-10-15: one narrow boxed path.
+# Its own project `bigospeedrun-board` (Lead, 2026-10-16), separate from the site's
+# `bigospeedrun`: its own lock, deploy timer and rollback. On the VPS:
+#   docker compose -p bigospeedrun-board -f /opt/bigospeedrun-board/compose.board.yml \
+#     --env-file /opt/bigospeedrun-board/release.env up -d --wait board-db board-api board-auth board-egress
+# release.env: BOARD_IMAGE, BOARD_SOCKET_GID, and BOARD_WRITES=off for the kill switch.
+# auto-deploy.sh changes only BOARD_IMAGE. A change to this file is a reviewed manual copy.
 #
 #   board-db       Postgres, no network, unix socket only, own volume
 #   board-migrate  one-off: migrations + role passwords (owner role), no network
@@ -16,6 +21,8 @@
 # 10003, admin_password 10004. (Root also reads dump_password: the bosbackup dump program.) /run/bigospeedrun-board/api and /run/bigospeedrun-board/auth are
 # two directories owned by Caddy's group (wg-caddy, gid in BOARD_SOCKET_GID), mode 2770:
 # Caddy reaches both sockets, and each service sees only its own directory.
+name: bigospeedrun-board
+
 x-hardening: &hardening
   read_only: true
   tmpfs: ['/tmp:size=16m,mode=1777']

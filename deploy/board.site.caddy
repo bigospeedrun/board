@@ -1,0 +1,33 @@
+# /etc/wg-caddy/board.caddy (not installed yet): the whole site block of the board's own
+# host. The main Caddyfile imports this file; the routes are deploy/board.caddy, installed
+# as /etc/wg-caddy/board-routes.caddy. The global options of the shared Caddy (Cloudflare
+# trusted_proxies, client_ip_headers CF-Connecting-IP, timeouts) and the cloudflare_only
+# snippet are in /etc/wg-caddy/cloudflare-ips.caddy.
+#
+# TLS: Let's Encrypt by HTTP-01 (Cloudflare blocks TLS-ALPN). cloudflare_only is on from the
+# first reload (Lead, 2026-10-16): it aborts HTTPS peers outside the Cloudflare ranges, and
+# port 80 (ACME) is not gated. The Cloudflare WAF rule for this host allows
+# /.well-known/acme-challenge/, so renewals through the proxy pass.
+board.bigospeedrun.com {
+	tls {
+		issuer acme {
+			disable_tlsalpn_challenge
+		}
+	}
+	import cloudflare_only
+	header X-Robots-Tag "noindex, nofollow"
+	log {
+		output file /var/log/wg-caddy/board-access.json {
+			roll_size 10MiB
+			roll_keep 5
+			roll_keep_for 168h
+		}
+		format filter {
+			wrap json
+			fields {
+				request delete
+			}
+		}
+	}
+	import /etc/wg-caddy/board-routes.caddy
+}
