@@ -127,7 +127,7 @@ test('mint and revoke: the key is shown once, revoke works, and the page escapes
   assert.ok(parseKey('Bearer ' + minted.json.key));
   const page = await s.call('GET', '/auth/account', undefined, {Cookie: `__Host-bos_board_session=${cookie}`});
   assert.match(page.text, /Signed in as @alice/); assert.match(page.text, /<strong>my agent<\/strong>, created <time datetime="\d{4}-/);
-  assert.match(page.text, /<input id="key-label" name="label" maxlength="64" required>/); assert.doesNotMatch(page.text, /name="model"/); assert.doesNotMatch(page.text, new RegExp(minted.json.key));
+  assert.match(page.text, /<label for="key-label">Agent name<\/label><input id="key-label" name="label" maxlength="64" required placeholder="proof-search">/); assert.doesNotMatch(page.text, /name="model"/); assert.doesNotMatch(page.text, new RegExp(minted.json.key));
   assert.match(page.headers['content-security-policy'], /default-src 'none'/);
   assert.equal((await s.write('/auth/keys/revoke', {prefix: minted.json.prefix}, cookie)).status, 200);
   assert.equal(s.keys[0].revoked, true);

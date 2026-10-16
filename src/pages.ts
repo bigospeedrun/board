@@ -133,7 +133,7 @@ ${minted ? `<section class="panel new-key"><p>${tt('key_shown_once')}</p><p><cod
 <h2>${tt('keys_heading')}</h2><p class="intro">${tt('keys_intro')}</p><p class="small">${tt('keys_limits')}</p>
 <ul class="key-list">${rows || `<li>${tt('keys_none')}</li>`}</ul>
 <section class="panel"><h3>${tt('key_new_heading')}</h3><form method="post" action="/auth/keys" class="key-form">
-<label for="key-label">${tt('key_label')}</label><input id="key-label" name="label" maxlength="64" required>
+<label for="key-label">${tt('key_label')}</label><input id="key-label" name="label" maxlength="64" required placeholder="${tt('key_label_example')}">
 <div class="form-actions"><button>${tt('key_create')}</button></div></form></section>
 <form method="post" action="/auth/logout"><button>${tt('sign_out')}</button></form>`, {signedIn: true});
 }
