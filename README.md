@@ -124,8 +124,9 @@ phase E plan). The files here:
 | `deploy/compose.board.yml` | `/opt/bigospeedrun-board/compose.board.yml` | the services; a change is a reviewed manual copy |
 | `deploy/auto-deploy.sh` | `/opt/bigospeedrun-board/ops/auto-deploy.sh` | one deploy tick (below) |
 | `deploy/bigospeedrun-board-autodeploy.{service,timer}` | `/etc/systemd/system/` | a tick five minutes after the last one ends |
-| `deploy/bigospeedrun-board.service` | `/etc/systemd/system/` | `compose up --wait` at boot |
-| `deploy/bigospeedrun-board.tmpfiles.conf` | `/etc/tmpfiles.d/bigospeedrun-board.conf` | the two socket directories (group wg-caddy by number) |
+| `deploy/bigospeedrun-board.service` | `/etc/systemd/system/` | `socket-dirs.sh`, then `compose up --wait` at boot |
+| `deploy/socket-dirs.sh` | `/opt/bigospeedrun-board/ops/socket-dirs.sh` | gives the socket directories wg-caddy's group by name (below) |
+| `deploy/bigospeedrun-board.tmpfiles.conf` | `/etc/tmpfiles.d/bigospeedrun-board.conf` | makes the socket directories early at boot (group root) |
 | `deploy/board-auto-deploy.env.example` | `/etc/bigospeedrun/board-auto-deploy.env` | image, repo and workflow names (no secrets) |
 | `deploy/board.site.caddy` | `/etc/wg-caddy/board.caddy` | the site block of `board.bigospeedrun.com` |
 | `deploy/board.caddy` | `/etc/wg-caddy/board-routes.caddy` | the routes (imported by the site block) |
@@ -160,19 +161,32 @@ Host setup, once:
 it follows the GHCR `main` tag (or `BOARD_TAG` for a rehearsal, from
 `.github/workflows/image-rehearsal.yml`), pulls a new digest, swaps with compose, checks
 both sockets, and rolls back by itself. It writes `/opt/bigospeedrun-board/auto-deploy/status.json`
-with Hosted Isomux's fields and words. Before an image that adds a migration, it writes an
-encrypted dump with the backup dump program to `/var/backups/bigospeedrun-board/pre-<commit>.tar`
-(the newest three are kept); a failed dump deploys nothing and is tried again on the next
-tick. A migration whose first line starts with `-- manual` stops the tick with
-`manual_deploy_needed` until an operator writes the image digest into
-`/opt/bigospeedrun-board/auto-deploy/manual-ok`. The hold file is
-`/etc/bigospeedrun/board-auto-deploy.hold`. `test/unit/auto-deploy.test.ts` covers the
-tick against a fake Docker and registry.
+with Hosted Isomux's fields and words. An image that adds a migration deploys only after an
+off-box backup pull that started after the tick first saw it: until then the tick ends
+`waiting` in phase `backup`. The backup host sees that in its health read and starts a
+pull; the dump program records the pull (`/var/lib/bos-board-backup/last-pull.json`, only
+when the backup login ran it), and the next tick deploys. So the copy from before the
+migration is a normal verified backup off the server. A migration whose first line starts
+with `-- manual` stops the tick with `manual_deploy_needed` until an operator writes the
+image digest into `/opt/bigospeedrun-board/auto-deploy/manual-ok` (it then still waits for
+the pull).
 
-**Kill switch:** add `BOARD_WRITES=off` to `release.env` and run
-`docker compose ... up -d board-api board-auth`. The deploy tick keeps the line.
-**Maintainers:** `docker compose ... run --rm board-admin ban <login> <reason>`. The CLI
-also has `revoke`, `hide` and `stats 7`.
+**Socket directories.** wg-caddy is a DynamicUser unit, so its gid is not fixed and its
+name resolves only while it runs. `deploy/socket-dirs.sh` (before each start of
+`bigospeedrun-board.service`) resolves the group by name and sets
+`/run/bigospeedrun-board/{api,auth}` to `root:<gid>` mode 2770; every deploy tick runs it
+with `--check` (a mismatch is a `tick_error`). Both fail when the gid differs from
+`BOARD_SOCKET_GID` in `release.env`, which the containers join: then set the new value and
+restart the board. The hold file is
+`/etc/bigospeedrun/board-auto-deploy.hold`. `test/unit/auto-deploy.test.ts` covers the
+tick against a fake Docker and registry, `test/unit/socket-dirs.test.ts` the group checks.
+
+**Kill switch:** add `BOARD_WRITES=off` to `/opt/bigospeedrun-board/release.env` and run
+`docker compose -p bigospeedrun-board -f /opt/bigospeedrun-board/compose.board.yml --env-file /opt/bigospeedrun-board/release.env up -d --wait board-api board-auth`.
+The deploy tick keeps the line. For a short test, create the hold file first, so that no
+deploy tick runs in between.
+**Maintainers:** the same `docker compose -p … -f … --env-file …` with
+`run --rm board-admin ban <login> <reason>`. The CLI also has `revoke`, `hide` and `stats 7`.
 
 ## Image
 
@@ -207,7 +221,9 @@ What the backup login (`bosbackup`, a VPS step outside this repo) needs:
   constants: compose project `bigospeedrun-board`, service `board-db`, database
   `board`, role `board_dump`, and the board's own age recipient. `meta.json` has
   `"migrations": null`: the backup host's tool compares migration lists only for
-  Drizzle's table. `test/db/dump-program.test.ts` runs it on a real Postgres 18.6.
+  Drizzle's table. After a whole stream to the backup login (`SUDO_USER=bosbackup`) it
+  writes the pull marker that the deploy tick reads. `test/db/dump-program.test.ts` runs
+  it on a real Postgres 18.6.
   `deploy/backup/bosbackup-sshd-revert.sh` is the dead-man revert for the sshd change.
 - **Differences from Wall Game:** board-db trusts no login, not even on its socket.
   So every `psql` and `pg_dump` call runs as `board_dump` with

@@ -1,15 +1,20 @@
 # Race board: start the compose project at boot (not installed yet). The containers also
-# have restart: unless-stopped; this unit makes the order explicit and waits for health.
+# have restart: unless-stopped; this unit fixes the socket directories, makes the order
+# explicit and waits for health. After= orders it behind the shared Caddy only; it adds
+# nothing to the wg-caddy unit.
 [Unit]
 Description=bigospeedrun board (compose project bigospeedrun-board)
 Requires=docker.service
-After=docker.service network-online.target systemd-tmpfiles-setup.service
+After=docker.service network-online.target systemd-tmpfiles-setup.service wg-caddy.service
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/bigospeedrun-board
+# The socket directories get wg-caddy's group by name (a dynamic gid); a mismatch with
+# BOARD_SOCKET_GID fails this unit, and the deploy tick reports tick_error.
+ExecStartPre=/opt/bigospeedrun-board/ops/socket-dirs.sh
 ExecStart=/usr/bin/docker compose -p bigospeedrun-board -f /opt/bigospeedrun-board/compose.board.yml --env-file /opt/bigospeedrun-board/release.env up -d --wait --wait-timeout 240 board-db board-api board-auth board-egress
 ExecStop=/usr/bin/docker compose -p bigospeedrun-board -f /opt/bigospeedrun-board/compose.board.yml --env-file /opt/bigospeedrun-board/release.env stop
 TimeoutStartSec=300

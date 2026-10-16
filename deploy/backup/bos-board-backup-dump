@@ -3,10 +3,8 @@
 
 A copy of the Wall Game dump program (VPS-BACKUP-20261004) with the board's constants.
 Database `board` in the board-db container of compose project bigospeedrun-board.
-Two callers, both as root: the forced command of the `bosbackup` SSH login (one sudoers
-rule with no arguments), and the board's auto-deploy.sh before a new migration (it saves
-the stream as pre-<commit>.tar). It writes ONE uncompressed tar stream to stdout with two
-members:
+Only the forced command of the `bosbackup` SSH login runs it, through one sudoers rule
+with no arguments. It writes ONE uncompressed tar stream to stdout with two members:
 
   meta.json  source identity, versions, sizes, hashes, row counts, sequences, migrations
   dump.age   pg_dump custom format, encrypted on this host to AGE_RECIPIENT
@@ -24,6 +22,11 @@ environment, so it is never in argv. The source identity queries (server_version
 pg_control_system) work for board_dump. "migrations" in meta.json is null: the backup
 host's tool compares migration lists only for Drizzle's table, and the restore test reads
 board_meta.migration from the restored copy instead.
+
+After the whole stream went out to the bosbackup login (sudo sets SUDO_USER), it writes
+PULL_MARKER with the snapshot time. The board's auto-deploy.sh deploys an image that adds
+a migration only after a pull newer than the time it first saw that image, so the copy
+from before the migration is on the backup host. A run by anyone else writes no marker.
 """
 import fcntl
 import hashlib
@@ -46,6 +49,8 @@ DATABASE = "board"
 DUMP_ROLE = "board_dump"
 SOCKET_DIR = "/var/run/postgresql"
 PASSWORD_FILE = "/etc/bigospeedrun/board/dump_password"
+PULL_USER = "bosbackup"
+PULL_MARKER = "/var/lib/bos-board-backup/last-pull.json"
 # The board's own age recipient (a public key; the identity stays on the backup host).
 AGE_RECIPIENT = "age1swnzlnqmg5q9wqwpyqs8l7m2y20cnfa5v2f5987z329udjrx592q6yn4vh"
 
@@ -139,6 +144,18 @@ class Session:
         self.p.stdin.close()
         if self.p.wait() != 0:
             die(f"dump-role session exit={self.p.returncode}")
+
+
+def write_marker(obj):
+    os.makedirs(os.path.dirname(PULL_MARKER), mode=0o755, exist_ok=True)
+    tmp = PULL_MARKER + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(obj, f, sort_keys=True)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, PULL_MARKER)
 
 
 def main():
@@ -267,6 +284,9 @@ def main():
                 with open(os.path.join(work, name), "rb") as f:
                     tar.addfile(ti, f)
         sys.stdout.buffer.flush()
+        if os.environ.get("SUDO_USER") == PULL_USER:
+            write_marker({"snapshot_utc": snapshot_utc, "finished_utc": finished,
+                          "ciphertext_sha256": enc_hash.hexdigest()})
         log(f"ok sent tables={len(row_counts)} rows={sum(row_counts.values())} "
             f"plaintext_bytes={plain_bytes} ciphertext_bytes={enc_bytes} ciphertext_sha256={enc_hash.hexdigest()}")
     finally:

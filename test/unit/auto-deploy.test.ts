@@ -1,9 +1,9 @@
-// deploy/auto-deploy.sh against a fake docker, a fake health probe, a fake dump program and
-// a stub registry plus GitHub API. Nothing here touches a real registry, GitHub or Docker.
+// deploy/auto-deploy.sh against a fake docker, a fake health probe, a fake pull marker, a
+// fake socket check and a stub registry plus GitHub API. Nothing here touches a real registry, GitHub or Docker.
 // The cases follow the site's src/lib/self-host-deploy.test.ts, plus the migration guard.
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, chmodSync, existsSync, rmSync, statSync, utimesSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, existsSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer, type Server} from 'node:http';
@@ -12,7 +12,7 @@ import type {AddressInfo} from 'node:net';
 
 const script = new URL('../../deploy/auto-deploy.sh', import.meta.url).pathname;
 const dir = mkdtempSync(join(tmpdir(), 'board-deploy-'));
-const root = join(dir, 'root'), envDir = join(dir, 'etc'), fake = join(dir, 'fake'), units = join(dir, 'units'), backups = join(dir, 'backups');
+const root = join(dir, 'root'), envDir = join(dir, 'etc'), fake = join(dir, 'fake'), units = join(dir, 'units'), marker = join(dir, 'last-pull.json');
 for (const path of [root, fake, units, join(fake, 'labels'), join(fake, 'migrations')]) mkdirSync(path, {recursive: true});
 mkdirSync(envDir, {mode: 0o700});
 const envLines = 'BOARD_IMAGE_REPO=ghcr.io/bigospeedrun/board\nBOARD_GITHUB_REPO=bigospeedrun/board\nBOARD_IMAGE_WORKFLOW=image.yml\n';
@@ -49,11 +49,12 @@ esac
 writeFileSync(join(fake, 'probe'), `#!/usr/bin/env bash
 d=$(cat ${fake}/running); grep -qx "$d" ${fake}/unhealthy && exit 1; echo "$d"
 `, {mode: 0o755});
-// The dump program: a fixed stream, or a failure while fake/dump-fail exists.
-writeFileSync(join(fake, 'dump'), `#!/usr/bin/env bash
-[[ -e ${fake}/dump-fail ]] && { echo 'FAIL dump' >&2; exit 1; }
-echo "dump at $(cat ${fake}/running)"
+// The socket check fails while fake/socket-bad exists.
+writeFileSync(join(fake, 'socket-check'), `#!/usr/bin/env bash
+[[ ! -e ${fake}/socket-bad ]]
 `, {mode: 0o755});
+// What the dump program writes after a pull by the backup host.
+const pulled = (when: Date) => writeFileSync(marker, JSON.stringify({snapshot_utc: when.toISOString().replace(/\.\d+Z$/, 'Z')}) + '\n');
 
 let mainDigest = digest(1), runStatus = 'completed', apiFails = false, served = {ok: 0, notModified: 0};
 let server: Server;
@@ -83,14 +84,13 @@ function tick(): Promise<{status: Record<string, unknown>; output: string}> {
   return new Promise(done => {
     const child = spawn('bash', [script], {env: {PATH: process.env.PATH, BOARD_ROOT: root, BOARD_ENV_DIR: envDir, BOARD_UNIT_DIR: units,
       BOARD_DOCKER: join(fake, 'docker'), BOARD_PROBE: join(fake, 'probe'), BOARD_REGISTRY: base(), BOARD_GITHUB_API: base(),
-      BOARD_DUMP: join(fake, 'dump'), BOARD_BACKUP_DIR: backups}});
+      BOARD_PULL_MARKER: marker, BOARD_SOCKET_CHECK: join(fake, 'socket-check')}});
     let output = '';
     child.stdout.on('data', chunk => output += chunk); child.stderr.on('data', chunk => output += chunk);
     child.on('close', () => done({status: JSON.parse(readFileSync(join(root, 'auto-deploy/status.json'), 'utf8')), output}));
   });
 }
 const failed = () => existsSync(join(root, 'auto-deploy/failed')) ? readFileSync(join(root, 'auto-deploy/failed'), 'utf8').trim().split('\n') : [];
-const dumps = () => existsSync(backups) ? readdirSync(backups).sort() : [];
 const running = () => readFileSync(join(fake, 'running'), 'utf8').trim();
 
 test('status.json has exactly the Hosted Isomux fields, in order; an unchanged tag is up to date', async () => {
@@ -104,7 +104,7 @@ test('status.json has exactly the Hosted Isomux fields, in order; an unchanged t
   assert.deepEqual(served, {ok: 1, notModified: 1});
 });
 
-test('a running image workflow is waiting; a new main digest with no new migration deploys without a dump', async () => {
+test('a running image workflow is waiting; a new main digest with no new migration deploys at once', async () => {
   runStatus = 'in_progress';
   let {status} = await tick();
   assert.equal(status.result, 'waiting');
@@ -113,31 +113,36 @@ test('a running image workflow is waiting; a new main digest with no new migrati
   ({status} = await tick());
   assert.equal(status.result, 'deployed');
   assert.equal(status.deployed, commit(2));
-  assert.deepEqual(dumps(), []);
   // Only the image line changes: the socket gid and the kill switch stay.
   assert.equal(readFileSync(join(root, 'release.env'), 'utf8'), `BOARD_SOCKET_GID=64543\nBOARD_WRITES=off\nBOARD_IMAGE=ghcr.io/bigospeedrun/board@${digest(2)}\n`);
 });
 
-test('a new migration gets a dump first; a failed dump deploys nothing and is tried again', async () => {
+test('a new migration waits for an off-box pull that started after the target was first seen', async () => {
+  pulled(new Date(Date.now() - 3_600_000));   // last night's pull is too old
   writeFileSync(join(fake, 'migrations', digest(3)), base5 + '0006_more.sql\t-- more boards\n');
-  writeFileSync(join(fake, 'dump-fail'), '');
   mainDigest = digest(3);
   let {status} = await tick();
-  assert.equal(status.result, 'tick_error');
+  assert.equal(status.result, 'waiting');
   assert.equal(status.phase, 'backup');
-  assert.match(String(status.tick_error_since), /^\d{4}-/);
+  assert.equal(status.waiting, true);
+  const since = String(status.waiting_since);
+  assert.match(since, /^\d{4}-\d\d-\d\dT/);
   assert.equal(running(), digest(2));
-  assert.deepEqual(dumps(), []);
-  rmSync(join(fake, 'dump-fail'));
+  // The wait keeps its start time across ticks (the dead-man measures it).
+  await new Promise(done => setTimeout(done, 1100));
+  ({status} = await tick());
+  assert.equal(status.result, 'waiting');
+  assert.equal(status.waiting_since, since);
+  pulled(new Date(Date.now() + 2000));
   ({status} = await tick());
   assert.equal(status.result, 'deployed');
-  assert.equal(status.tick_error_since, null);
-  assert.deepEqual(dumps(), [`pre-${commit(3)}.tar`]);
-  // The dump was taken while the previous image still ran.
-  assert.equal(readFileSync(join(backups, `pre-${commit(3)}.tar`), 'utf8'), `dump at ${digest(2)}\n`);
+  assert.equal(status.deployed, commit(3));
+  assert.equal(status.waiting, false);
+  assert.equal(existsSync(join(root, 'auto-deploy/backup-wanted')), false);
 });
 
-test('a migration marked -- manual stops until the operator allows that digest', async () => {
+test('a migration marked -- manual stops until the operator allows that digest, then still waits for a pull', async () => {
+  pulled(new Date(Date.now() - 3_600_000));
   writeFileSync(join(fake, 'migrations', digest(4)), base5 + '0006_more.sql\t-- more boards\n0007_split.sql\t-- manual: split a table\n');
   mainDigest = digest(4);
   let {status} = await tick();
@@ -146,24 +151,30 @@ test('a migration marked -- manual stops until the operator allows that digest',
   assert.equal(running(), digest(3));
   writeFileSync(join(root, 'auto-deploy/manual-ok'), digest(4) + '\n');
   ({status} = await tick());
+  assert.equal(status.result, 'waiting');
+  assert.equal(status.phase, 'backup');
+  pulled(new Date(Date.now() + 2000));
+  ({status} = await tick());
   assert.equal(status.result, 'deployed');
   assert.equal(status.deployed, commit(4));
 });
 
-test('only the newest three pre-migration dumps are kept', async () => {
-  let list = base5 + '0006_more.sql\t-- more boards\n0007_split.sql\t-- manual: split a table\n';
+test('socket directories that do not match wg-caddy deploy nothing', async () => {
+  writeFileSync(join(fake, 'socket-bad'), '');
+  mainDigest = digest(5);
+  const {status} = await tick();
+  assert.equal(status.result, 'tick_error');
+  assert.equal(status.phase, 'sockets');
+  assert.equal(running(), digest(4));
+  rmSync(join(fake, 'socket-bad'));
+});
+
+test('the same migrations as the running image need no new pull', async () => {
   for (const n of [5, 6, 7]) {
-    // Age the dumps that exist, so that the newest-first order does not depend on the clock.
-    for (const name of dumps()) {
-      const old = new Date(statSync(join(backups, name)).mtimeMs - 120_000);
-      utimesSync(join(backups, name), old, old);
-    }
-    list += `00${n + 3}_step.sql\t-- step ${n}\n`;
-    writeFileSync(join(fake, 'migrations', digest(n)), list);
+    writeFileSync(join(fake, 'migrations', digest(n)), readFileSync(join(fake, 'migrations', digest(4))));
     mainDigest = digest(n);
     assert.equal((await tick()).status.result, 'deployed');
   }
-  assert.deepEqual(dumps(), [`pre-${commit(5)}.tar`, `pre-${commit(6)}.tar`, `pre-${commit(7)}.tar`]);
 });
 
 test('an unhealthy image rolls back by itself and is not tried again', async () => {

@@ -5,7 +5,7 @@
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {mkdtempSync, writeFileSync, readFileSync, rmSync} from 'node:fs';
+import {mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync} from 'node:fs';
 import {randomBytes} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -37,16 +37,17 @@ before(async () => {
 after(() => { db?.stop(); rmSync(work, {recursive: true, force: true}); });
 
 // Run the program as a module with this test's constants, as root would run it on the VPS.
-function runProgram(password = join(work, 'dump_password')) {
+const marker = join(work, 'marker', 'last-pull.json');
+function runProgram(password = join(work, 'dump_password'), sudoUser = 'bosbackup') {
   const driver = `
 import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader('dump', sys.argv[1])
 spec = importlib.util.spec_from_loader('dump', loader); m = importlib.util.module_from_spec(spec); loader.exec_module(m)
-m.COMPOSE_PROJECT, m.PASSWORD_FILE, m.LOCK_FILE, m.AGE_RECIPIENT, m.WORK_PARENT, m.DOCKER, m.AGE = sys.argv[2:9]
+m.COMPOSE_PROJECT, m.PASSWORD_FILE, m.LOCK_FILE, m.AGE_RECIPIENT, m.WORK_PARENT, m.DOCKER, m.AGE, m.PULL_MARKER = sys.argv[2:10]
 sys.argv = sys.argv[:1]
 m.main()`;
-  return spawnSync('python3', ['-I', '-c', driver, program, project, password, join(work, 'lock'), recipient, work, 'docker', 'age'],
-    {maxBuffer: 64 << 20});
+  return spawnSync('python3', ['-I', '-B', '-c', driver, program, project, password, join(work, 'lock'), recipient, work, 'docker', 'age', marker],
+    {maxBuffer: 64 << 20, env: {...process.env, SUDO_USER: sudoUser}});
 }
 
 test('the dump program streams meta.json and an encrypted custom-format dump of the board', {skip: !hasAge && 'age is not installed'}, () => {
@@ -79,6 +80,15 @@ test('the dump program streams meta.json and an encrypted custom-format dump of 
   assert.equal(list.status, 0, list.stderr);
   assert.match(list.stdout, /TABLE DATA board post /);
   assert.match(list.stdout, /TABLE DATA board_meta migration /);
+  // A run by the bosbackup login leaves the pull marker that the deploy tick reads.
+  assert.equal(JSON.parse(readFileSync(marker, 'utf8')).snapshot_utc, meta.snapshot_utc);
+});
+
+test('a run by another sudo user leaves no pull marker', {skip: !hasAge && 'age is not installed'}, () => {
+  rmSync(marker, {force: true});
+  const run = runProgram(join(work, 'dump_password'), 'wgadmin');
+  assert.equal(run.status, 0, String(run.stderr));
+  assert.equal(existsSync(marker), false);
 });
 
 test('a wrong dump password makes no dump', {skip: !hasAge && 'age is not installed'}, () => {

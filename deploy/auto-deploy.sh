@@ -13,12 +13,19 @@
 # checks, and rolls back by itself.
 #
 # The board has a database, so the tick adds a migration guard before the swap: when the
-# new image adds a file in db/migrations, the dump program (the same one the backup login
-# runs) writes an encrypted dump to $backup_dir first. A failed dump is a tick_error (tried
-# again on the next tick; the dead-man alerts after one hour). A new migration whose first
-# line starts with `-- manual` stops with manual_deploy_needed until an operator writes the
-# target digest into $state/manual-ok. Migrations are forward-only and the previous image's
-# migrate step skips the rows it does not know, so a rollback runs on the new schema.
+# new image adds a file in db/migrations, it deploys only after an off-box backup pull that
+# started after it first saw the target. The backup host's pulls are the only proof: the
+# dump program writes $pull_marker only when the bosbackup login ran it, after the whole
+# stream went out. Until then the tick ends `waiting` in phase `backup`; on the backup host
+# bos-board-backup-gate sees that in the health read and starts a pull, so the copy from
+# before the migration is a normal verified backup there. A new migration whose first line
+# starts with `-- manual` stops with manual_deploy_needed until an operator writes the
+# target digest into $state/manual-ok (and then it still waits for the pull). Migrations are
+# forward-only and the previous image's migrate step skips the rows it does not know, so a
+# rollback runs on the new schema.
+#
+# Every tick also checks the socket directories (socket-dirs.sh --check): their group must
+# be wg-caddy's gid now, which is dynamic (DynamicUser), and equal BOARD_SOCKET_GID.
 #
 # Per-host values come from $env_dir/board-auto-deploy.env (0600), plain KEY=value, never run:
 #   BOARD_IMAGE_REPO      ghcr.io/bigospeedrun/board
@@ -31,8 +38,8 @@
 # line), BOARD_SOCKET_GID and, for the kill switch, BOARD_WRITES=off. The other lines stay.
 # For a local run and the tests: BOARD_ROOT, BOARD_ENV_DIR, BOARD_UNIT_DIR, BOARD_SYSTEMCTL,
 # BOARD_DOCKER, BOARD_REGISTRY, BOARD_GITHUB_API, BOARD_PROBE (a command that prints the
-# running image digest, instead of asking Docker), BOARD_SOCKET_DIR, BOARD_DUMP,
-# BOARD_BACKUP_DIR.
+# running image digest, instead of asking Docker), BOARD_SOCKET_DIR, BOARD_PULL_MARKER,
+# BOARD_SOCKET_CHECK (a command instead of socket-dirs.sh --check).
 set -euo pipefail
 umask 077
 
@@ -45,9 +52,9 @@ main() {
   registry=${BOARD_REGISTRY:-https://ghcr.io}
   api=${BOARD_GITHUB_API:-https://api.github.com}
   sockets=${BOARD_SOCKET_DIR:-/run/bigospeedrun-board}
-  dump=${BOARD_DUMP:-/usr/local/sbin/bos-board-backup-dump}
-  backup_dir=${BOARD_BACKUP_DIR:-/var/backups/bigospeedrun-board}
+  pull_marker=${BOARD_PULL_MARKER:-/var/lib/bos-board-backup/last-pull.json}
   here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+  socket_check=${BOARD_SOCKET_CHECK:-$here/socket-dirs.sh --check}
   state=$root/auto-deploy
 
   result=error phase=start target="" deployed="" waiting=false units=unchecked
@@ -82,6 +89,10 @@ main() {
     return 0
   }
 
+  if ! $socket_check >/dev/null; then
+    tick_error sockets "the socket directories do not match wg-caddy's group (socket-dirs.sh --check)"
+    return 0
+  fi
   select_target || return 0
   guard_migrations || return 0
   deploy_target
@@ -259,14 +270,17 @@ migrations_of() {
 }
 
 guard_migrations() {
-  local old new added name first out
+  local old new added name first since snap
   phase=migrations
   if ! old=$(migrations_of "$image@$(release_digest "$root/release.env")") || ! new=$(migrations_of "$image@$digest"); then
     tick_error migrations "the migration lists could not be read"
     return 1
   fi
   added=$(comm -13 <(cut -f1 <<<"$old" | sort) <(cut -f1 <<<"$new" | sort))
-  [[ -z $added ]] && return 0
+  if [[ -z $added ]]; then
+    rm -f "$state/backup-wanted"
+    return 0
+  fi
   while IFS= read -r name; do
     first=$(awk -F'\t' -v n="$name" '$1 == n {print $2; exit}' <<<"$new")
     if [[ $first == "-- manual"* && $(cat "$state/manual-ok" 2>/dev/null) != "$digest" ]]; then
@@ -275,18 +289,21 @@ guard_migrations() {
       return 1
     fi
   done <<<"$added"
-  mkdir -p "$backup_dir"
-  out=$backup_dir/pre-$target.tar
-  if ! "$dump" >"$out.partial"; then
-    rm -f "$out.partial"
-    tick_error backup "the pre-migration dump failed: $target not deployed"
+  # The time this target first needed a backup; a pull must start after it.
+  [[ $(sed -n 1p "$state/backup-wanted" 2>/dev/null) == "$digest" ]] ||
+    printf '%s\n%s\n' "$digest" "$(date -u +%FT%TZ)" >"$state/backup-wanted"
+  since=$(sed -n 2p "$state/backup-wanted")
+  snap=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["snapshot_utc"])' "$pull_marker" 2>/dev/null) || snap=""
+  # Both are UTC times in the same format, so the text order is the time order.
+  if [[ -z $snap || ! $snap > $since ]]; then
+    result=waiting phase=backup waiting=true
+    echo "$since" >"$state/waiting-since"
+    say "$target adds a migration: waiting for an off-box backup pull after $since"
     return 1
   fi
-  mv "$out.partial" "$out"
-  rm -f "$state/tick-error-since"
-  # Keep the newest three pre-migration dumps.
-  ls -1t "$backup_dir"/pre-*.tar 2>/dev/null | tail -n +4 | while IFS= read -r name; do rm -f "$name"; done
-  say "pre-migration dump for $target: $out"
+  rm -f "$state/backup-wanted" "$state/waiting-since"
+  waiting=false
+  say "$target adds a migration: off-box backup pull at $snap"
 }
 
 compose() { "$docker" compose -p bigospeedrun-board -f "$root/compose.board.yml" --env-file "$root/release.env" "$@"; }
