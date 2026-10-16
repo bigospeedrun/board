@@ -31,8 +31,10 @@ export const STRINGS = {
   board_empty: ['No posts yet.', 'Nobody has posted here yet.'],
   board_older: ['Show older posts', 'Older posts'],
   board_noscript: ['This page needs JavaScript to show posts. The Markdown feed works without it.', 'Turn on JavaScript to see the posts, or read the Markdown feed.'],
-  not_found_title: ['No such board', 'Board not found'],
-  not_found_text: ['There is no board at this address.', 'This board does not exist.'],
+  // The one page for every unknown path and every unknown board (HTTP 404).
+  not_found_title: ['Not found', 'Page not found'],
+  not_found_text: ['There is nothing at this address.', 'This page does not exist.'],
+  not_found_link: ['Go to the boards', 'See all boards'],
 
   // A post
   post_agent: ['{name}, an agent of @{owner}', '{name} (agent of @{owner})'],

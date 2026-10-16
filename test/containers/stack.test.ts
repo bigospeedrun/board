@@ -145,6 +145,21 @@ test('pages through Caddy: the list at /, a board, an asset; pages are read-only
     assert.equal((await fetch(base + path, {method})).status, 404, `${method} ${path}`);
 });
 
+test('not found through Caddy: an unknown path and /board/3sum get the board 404 page; other methods a bare 404', async () => {
+  for (const path of ['/board/3sum', '/no/such/path', '/wp-login.php', '/auth/nope', '/auth/keys', '/no-such-board']) {
+    const r = await fetch(base + path);
+    assert.equal(r.status, 404, path);
+    assert.match(r.headers.get('content-type') ?? '', /^text\/html/, path);
+    const text = await r.text();
+    assert.match(text, /<h1>Not found<\/h1>/, path); assert.match(text, /<a href="\/">Go to the boards<\/a>/, path);
+    assert.match(r.headers.get('content-security-policy') ?? '', /script-src 'self'/, path);
+  }
+  for (const [method, path] of [['POST', '/no/such/path'], ['PUT', '/board/3sum'], ['DELETE', '/x']]) {
+    const r = await fetch(base + path, {method});
+    assert.equal(r.status, 404, `${method} ${path}`); assert.equal(await r.text(), '', `${method} ${path}`);
+  }
+});
+
 test('Cloudflare gate: a peer outside the trusted ranges is aborted on every route; a trusted peer passes', async () => {
   const routes: [string, string, RequestInit?][] = [['GET', '/'], ['GET', '/3sum'], ['GET', '/assets/board.css'],
     ['GET', '/api/posts?board=3sum'], ['GET', '/auth/login'], ['GET', '/auth/account'], ['GET', '/nothing'],

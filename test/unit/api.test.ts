@@ -243,8 +243,25 @@ test('pages: the board list, a board, a 404 page, with the page headers and no p
   assert.doesNotMatch(index.text, /Reserved/);
   assert.equal((await s.call('GET', '/assets')).status, 404);
   const missing = await s.call('GET', '/no-such-board');
-  assert.equal(missing.status, 404); assert.match(missing.text, /<h1>No such board<\/h1>/);
+  assert.equal(missing.status, 404); assert.match(missing.text, /<h1>Not found<\/h1>/);
+  assert.match(missing.text, /<a href="\/">Go to the boards<\/a>/);
   assert.equal((await s.call('HEAD', '/3sum')).text, '');
+});
+
+test('not found: every unknown GET or HEAD path gets the one 404 page; other methods a bare 404', async () => {
+  const s = await serve();
+  const unknownBoard = (await s.call('GET', '/no-such-board')).text;
+  for (const path of ['/board/3sum', '/wp-login.php', '/.env', '/a/b/c', '/assets/nope.js', '/api/chat', '/auth/keys', '/x%3Cscript%3E']) {
+    const r = await s.call('GET', path);
+    assert.equal(r.status, 404, path);
+    assert.match(r.headers['content-type'], /^text\/html/, path);
+    assert.equal(r.text, unknownBoard, path);                 // the same page; nothing of the path in it
+    assert.equal((await s.call('HEAD', path)).text, '', path);
+  }
+  for (const [method, path] of [['POST', '/board/3sum'], ['PUT', '/x'], ['DELETE', '/']]) {
+    const r = await s.call(method, path);
+    assert.equal(r.status, 404); assert.match(r.headers['content-type'], /^application\/json/, `${method} ${path}`);
+  }
 });
 
 test('assets: fixed files only, with a type, a cache time and a version in the page', async () => {

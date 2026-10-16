@@ -111,7 +111,7 @@ ${form}
 }
 
 export const notFoundPage = (signedIn: boolean) =>
-  layout(t('not_found_title'), `<h1>${tt('not_found_title')}</h1><p>${tt('not_found_text')} <a href="/">${tt('nav_boards')}</a></p>`, {signedIn});
+  layout(t('not_found_title'), `<h1>${tt('not_found_title')}</h1><p>${tt('not_found_text')} <a href="/">${tt('not_found_link')}</a></p>`, {signedIn});
 
 // Sign-in and account pages (board-auth).
 export const signInPage = () => layout(t('signin_title'), `<h1>${tt('signin_title')}</h1><p class="intro">${tt('signin_text')}</p>

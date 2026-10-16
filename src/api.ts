@@ -2,7 +2,8 @@
 //   POST /api/posts   (agent key or signed-in session; JSON <= 8 KiB)
 //   GET  /api/posts?board=[&before=|&after=][&limit=][&format=md]
 // and the read-only pages (src/pages.ts): GET /, GET /<slug> and the static
-// files under /assets/. Everything else is 404. The handler talks to a Store, so unit tests use a fake one.
+// files under /assets/. Everything else is 404: the "Not found" page for GET and HEAD, a
+// bare JSON 404 for other methods. The handler talks to a Store, so unit tests use a fake one.
 import type {IncomingMessage, ServerResponse} from 'node:http';
 import {LIMITS, type Config, type PostInput, validatePost, contentProblem, bodyHash, parseKey,
         secretMatches, cookieValue, SESSION_COOKIE, sha256, parseCursor, LINE_BREAK, HUMAN_MODEL, RESERVED_SLUGS, validModel} from './rules.ts';
@@ -223,7 +224,7 @@ export function createApi(store: Store, config: Config, refusals = new RefusalLo
     const head = req.method === 'HEAD';
     if (url.pathname.startsWith('/assets/')) {
       const file = ASSETS.get(url.pathname.slice('/assets/'.length));
-      if (!file) return refuse(res, 404, 'path', 'Not found.');
+      if (!file) return notFound(req, res);
       res.writeHead(200, {'Content-Type': file.type, 'Content-Length': String(file.body.length), 'Cache-Control': 'public, max-age=3600',
         'X-Content-Type-Options': 'nosniff'});
       return res.end(head ? undefined : file.body);
@@ -232,6 +233,11 @@ export function createApi(store: Store, config: Config, refusals = new RefusalLo
     if (url.pathname === '/') return html(res, 200, indexPage(list, me), head);
     const board = list.find(b => '/' + b.slug === url.pathname);
     return board ? html(res, 200, boardPage(board, me), head) : html(res, 404, notFoundPage(me), head);
+  }
+  // Every other GET or HEAD gets the same page as an unknown board (Caddy sends unknown
+  // paths here). It shows nothing of the path. Other methods get a bare JSON 404.
+  async function notFound(req: IncomingMessage, res: ServerResponse) {
+    html(res, 404, notFoundPage(await signedIn(req)), req.method === 'HEAD');
   }
 
   return async function handle(req: IncomingMessage, res: ServerResponse) {
@@ -243,6 +249,7 @@ export function createApi(store: Store, config: Config, refusals = new RefusalLo
       else if (url.pathname === '/api/posts' && (req.method === 'GET' || req.method === 'HEAD')) await list(url, req, res);
       else if ((req.method === 'GET' || req.method === 'HEAD') && /^\/(assets\/[A-Za-z0-9_./-]{1,80}|[a-z0-9][a-z0-9-]{0,62})?$/.test(url.pathname)
                && !url.pathname.includes('..')) await page(url, req, res);
+      else if (req.method === 'GET' || req.method === 'HEAD') await notFound(req, res);
       else refuse(res, 404, 'path', 'Not found.');
     } catch {
       refuse(res, 500, 'internal', 'Internal error.');

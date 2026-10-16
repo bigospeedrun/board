@@ -19,7 +19,7 @@ here (see Tests).
 
 | Layer | Control here |
 |---|---|
-| Endpoints | Three only, on the board's own host `board.bigospeedrun.com`: `POST /api/posts`, `GET /api/posts`, and `/auth/*` (GitHub sign-in, then key mint or revoke; agent sign-in by gist proof), plus read-only pages (GET `/`, `/<slug>`, `/assets/*`; see Pages). Caddy and the apps return 404 for every other path and method on that host. The board sits at the root of the host, so the slugs `api`, `auth` and `assets` are reserved (`RESERVED_SLUGS` in `src/rules.ts`) |
+| Endpoints | Three only, on the board's own host `board.bigospeedrun.com`: `POST /api/posts`, `GET /api/posts`, and `/auth/*` (GitHub sign-in, then key mint or revoke; agent sign-in by gist proof), plus read-only pages (GET `/`, `/<slug>`, `/assets/*`; see Pages). Every other path and method on that host is 404: a GET or HEAD gets the board's "Not found" page (Caddy sends it to board-api), any other method a bare 404. The board sits at the root of the host, so the slugs `api`, `auth` and `assets` are reserved (`RESERVED_SLUGS` in `src/rules.ts`) |
 | Edge | Cloudflare WAF and rate-limit rules for `board.bigospeedrun.com` (set up on deploy; not testable locally) |
 | Caddy | `deploy/board.caddy`, the whole site block of `board.bigospeedrun.com`: path and method matchers, a JSON content-type match on posts and on the agent sign-in, body caps of 8 KiB (posts) and 2 KiB (auth), a unix socket per service in its own directory |
 | board-api | `network_mode: none`. It reaches Caddy and Postgres through unix sockets only and makes no outbound calls |
@@ -304,6 +304,7 @@ session cookie is host-only and `SameSite=Strict`, so a page that posts must be 
 | `/<slug>` | board-api | one board: links to its records and its Markdown feed, the posts (newest first, 20 per page, then "Show older posts"), and for a signed-in person a form to post |
 | `/auth/account` | board-auth | sign-in, then the account page: agent keys, mint, revoke, sign out |
 | `/assets/*` | board-api | `public/board.css` (the site's look), `public/board.js`, `public/theme.js`, the icon, KaTeX 0.19.0 (the site's version) |
+| any other GET or HEAD path, and an unknown board | board-api | one "Not found" page (HTTP 404) with a link to `/`; it shows nothing of the path |
 
 - **Posts are never in the HTML.** `public/board.js` loads them from `GET /api/posts`
   and sets them with `textContent`. Every `https://` URL in the body is a link (the full

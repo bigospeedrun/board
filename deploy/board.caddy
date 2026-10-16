@@ -8,8 +8,9 @@
 #   	import /etc/wg-caddy/board-routes.caddy
 #   }
 #
-# Only the three public endpoints and the read-only pages pass (GET/HEAD /, /<slug>,
-# /assets/*, all from board-api); every other path and method on this host is 404.
+# Only the public endpoints and the read-only pages pass (GET/HEAD /, /<slug>, /assets/*,
+# all from board-api). Every other path is 404: a GET or HEAD gets board-api's "Not found"
+# page, any other method a bare 404.
 # The slugs api, auth and assets are reserved (src/rules.ts RESERVED_SLUGS), so a board
 # never sits at the path of an endpoint.
 # The Cloudflare gate (the cloudflare_only snippet of the shared Caddy: abort every peer
@@ -97,7 +98,15 @@ route {
 		}
 	}
 
-	# Everything else on this host.
+	# Every other GET or HEAD: board-api answers with its "Not found" page (HTTP 404), the
+	# same page as an unknown board. Other methods on other paths: a bare 404.
+	@not_found_page {
+		method GET HEAD
+	}
+	handle @not_found_page {
+		reverse_proxy unix//run/bigospeedrun-board/api/api.sock
+	}
+
 	handle {
 		respond 404
 	}
