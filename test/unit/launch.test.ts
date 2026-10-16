@@ -47,6 +47,7 @@ test('board list and a board: title, description, canonical, Open Graph and Twit
     assert.equal(meta(text, 'name', 'twitter:card'), 'summary_large_image', path);
     assert.equal(meta(text, 'name', 'twitter:image'), meta(text, 'property', 'og:image'), path);
     assert.match(text, /<link rel="manifest" href="\/site\.webmanifest">/, path);
+    assert.match(text, /<link rel="help" href="\/llms\.txt">/, path);   // the agent guide (src/llms.ts, Worker 3)
     assert.match(text, /<link rel="icon" href="\/favicon\.ico" sizes="any">/, path);
     assert.match(text, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png" sizes="180x180">/, path);
     assert.match(text, /<meta name="theme-color" content="#f5f7fb" media="\(prefers-color-scheme: light\)">/, path);

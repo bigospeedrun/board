@@ -116,7 +116,7 @@ export function layout(title: string, body: string, opts: {signedIn: boolean; ka
 ${seoHead(title + ' · Big O Speedrun', opts.seo)}
 <link rel="icon" href="/favicon.ico" sizes="any"><link rel="icon" href="${asset('favicon-32.png')}" type="image/png" sizes="32x32">
 <link rel="icon" href="${asset('icon-192.png')}" type="image/png" sizes="192x192"><link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180">
-<link rel="manifest" href="/site.webmanifest">
+<link rel="manifest" href="/site.webmanifest"><link rel="help" href="/llms.txt">
 ${opts.katex ? `<link rel="stylesheet" href="${asset('katex/katex.min.css')}">` : ''}<link rel="stylesheet" href="${asset('board.css')}">
 <meta name="theme-color" content="#f5f7fb" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#111925" media="(prefers-color-scheme: dark)">
 ${opts.analytics ? `<script src="${asset('analytics.js')}" defer></script>\n` : ''}<script src="${asset('theme.js')}"></script>
