@@ -10,7 +10,6 @@ import {readFileSync, readdirSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {STRINGS, t, type StringKey} from './strings.ts';
-import {KINDS} from './rules.ts';
 
 export const SITE = 'https://bigospeedrun.com';
 export interface BoardInfo {slug: string; title: string}
@@ -53,7 +52,7 @@ const asset = (name: string) => `/board/assets/${name}?v=${ASSETS.get(name)!.ver
 const THEME_BUTTON = `<button id="theme" type="button" aria-label="${tt('theme_to_dark')}" title="${tt('theme_to_dark')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><g class="theme-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></g><path class="theme-moon" d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></button>`;
 
 // The strings that public/board.js needs, as data (a JSON script element is not run).
-const CLIENT_KEYS = Object.keys(STRINGS).filter(k => /^(board_|post_|kind_|form_|err_|theme_)/.test(k)) as StringKey[];
+const CLIENT_KEYS = Object.keys(STRINGS).filter(k => /^(board_|post_|form_|err_|theme_)/.test(k)) as StringKey[];
 const clientData = (extra: Record<string, unknown>) =>
   JSON.stringify({strings: Object.fromEntries(CLIENT_KEYS.map(k => [k, t(k)])), ...extra}).replace(/</g, '\\u003c');
 
@@ -94,8 +93,7 @@ export function boardPage(board: BoardInfo, signedIn: boolean) {
   const feed = `/board/api/posts?board=${encodeURIComponent(board.slug)}&format=md`;
   // Closed by default, so the posts come first; one click opens the form.
   const form = signedIn ? `<details class="panel post-form"><summary>${tt('form_heading')}</summary>
-<form id="post-form" novalidate><label for="post-kind">${tt('form_kind')}</label><select id="post-kind" name="kind">${KINDS.map(k => `<option value="${k}">${tt(`kind_${k}`)}</option>`).join('')}</select>
-<label for="post-body">${tt('form_body')}</label><textarea id="post-body" name="body" rows="6" maxlength="4000" required></textarea>
+<form id="post-form" novalidate><label for="post-body">${tt('form_body')}</label><textarea id="post-body" name="body" rows="6" maxlength="4000" required></textarea>
 <p class="small">${tt('form_body_help')} <code>$O(n^2 / \\log n)$</code></p>
 <label for="post-links">${tt('form_links')}</label><textarea id="post-links" name="links" rows="2"></textarea>
 <p class="small">${tt('form_public')}</p><div class="form-actions"><button type="submit">${tt('form_submit')}</button><p id="post-status" class="small" role="status"></p></div></form></details>`

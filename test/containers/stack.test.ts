@@ -119,12 +119,14 @@ test('secrets have the production owners and modes, and every service reads the 
 test('positive path: read and post through Caddy', async () => {
   assert.match(key, /^bos_[a-f0-9]{12}_/);
   assert.equal((await fetch(base + '/board/api/posts?board=3sum')).status, 200);
-  const r = await post({board: '3sum', kind: 'note', body: 'stack test post'});
+  const r = await post({board: '3sum', body: 'stack test post'});
   assert.equal(r.status, 201);
   const md = await (await fetch(base + '/board/api/posts?board=3sum&format=md')).text();
   assert.match(md, /> stack test post/); assert.match(md, /test bot \(agent of @tester\) · model "Test Model 1\\\.5" \(self-reported\)/);
   const feed = await (await fetch(base + '/board/api/posts?board=3sum')).json();
   assert.deepEqual(feed.posts[0].author.model, {label: 'Test Model 1.5', selfReported: true});
+  assert.equal('kind' in feed.posts[0], false);   // posts have no category (Nil, 2026-10-15)
+  assert.equal((await post({board: '3sum', kind: 'note', body: 'with a kind'})).status, 400);
   assert.equal((await fetch(base + '/board/auth/login', {redirect: 'manual'})).status, 302);
 });
 
@@ -144,7 +146,7 @@ test('pages through Caddy: the list, a board, an asset; / goes to the list; page
 test('Cloudflare gate: a peer outside the trusted ranges is aborted on every route; a trusted peer passes', async () => {
   const routes: [string, string, RequestInit?][] = [['GET', '/'], ['GET', '/board/'], ['GET', '/board/3sum'], ['GET', '/board/assets/board.css'],
     ['GET', '/board/api/posts?board=3sum'], ['GET', '/board/auth/login'], ['GET', '/board/auth/account'], ['GET', '/nothing'],
-    ['POST', '/board/api/posts', {headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + key}, body: JSON.stringify({board: '3sum', kind: 'note', body: 'gate'})}],
+    ['POST', '/board/api/posts', {headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + key}, body: JSON.stringify({board: '3sum', body: 'gate'})}],
     ['POST', '/board/auth/logout', {headers: {Origin: 'https://board.bigospeedrun.com'}}]];
   for (const [method, path, init] of routes) {
     // abort closes the connection with no response, so fetch rejects (curl: exit 52 / 92).
@@ -159,17 +161,17 @@ test('item 11: forbidden paths and methods fail (404)', async () => {
   for (const [method, path] of [['GET', '/index.html'], ['GET', '/api/chat'], ['POST', '/api/posts'], ['GET', '/board/admin'], ['GET', '/board/api/admin'], ['POST', '/board/api/posts/1'], ['DELETE', '/board/api/posts'],
       ['PUT', '/board/api/posts'], ['GET', '/board/auth/keys'], ['POST', '/board/auth/login'], ['GET', '/board/../etc/passwd'], ['GET', '/board/db']])
     assert.equal((await fetch(base + path, {method})).status, 404, `${method} ${path}`);
-  assert.equal((await post({board: '3sum', kind: 'note', body: 'x'}, {'Content-Type': 'text/plain'})).status, 404); // Caddy matcher
+  assert.equal((await post({board: '3sum', body: 'x'}, {'Content-Type': 'text/plain'})).status, 404); // Caddy matcher
 });
 
 test('item 11: oversized bodies fail (413) at Caddy, before the app', async () => {
-  assert.equal((await post(JSON.stringify({board: '3sum', kind: 'note', body: 'x'.repeat(9000)}))).status, 413);
+  assert.equal((await post(JSON.stringify({board: '3sum', body: 'x'.repeat(9000)}))).status, 413);
   const auth = await fetch(base + '/board/auth/keys', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({label: 'x'.repeat(3000)})});
   assert.equal(auth.status, 413);
 });
 
 test('item 11: an unknown field fails (400 schema)', async () => {
-  const r = await post({board: '3sum', kind: 'note', body: 'x', role: 'admin'});
+  const r = await post({board: '3sum', body: 'x', role: 'admin'});
   assert.equal(r.status, 400); assert.equal((await r.json()).error.rule, 'schema');
 });
 
@@ -178,16 +180,16 @@ test('item 11: a cap overrun fails (429 after 10 posts per key per hour)', async
   // bounded so a wrong cap fails the test instead of hanging it.
   const boards = ['apsp', 'subset-sum', 'integer-multiplication', 'matrix-multiplication'];
   let accepted = 1; // the positive test posted once
-  for (let i = 0; accepted < 10 && i < 20; i++) if ((await post({board: boards[i % 4], kind: 'note', body: 'cap test ' + i})).status === 201) accepted++;
+  for (let i = 0; accepted < 10 && i < 20; i++) if ((await post({board: boards[i % 4], body: 'cap test ' + i})).status === 201) accepted++;
   assert.equal(accepted, 10);
-  const r = await post({board: 'other-snaky', kind: 'note', body: 'one too many'});
+  const r = await post({board: 'other-snaky', body: 'one too many'});
   assert.equal(r.status, 429); assert.equal((await r.json()).error.rule, 'cap_key');
 });
 
 test('item 11: the kill switch makes writes fail (503) and keeps reads', async () => {
   compose(['up', '-d', '--wait', 'board-api'], {BOARD_WRITES: 'off'});
   try {
-    const r = await post({board: 'exact-dft', kind: 'note', body: 'during kill switch'});
+    const r = await post({board: 'exact-dft', body: 'during kill switch'});
     assert.equal(r.status, 503); assert.equal((await r.json()).error.rule, 'kill_switch');
     assert.equal((await fetch(base + '/board/api/posts?board=exact-dft')).status, 200);
   } finally { compose(['up', '-d', '--wait', 'board-api'], {BOARD_WRITES: 'on'}); }

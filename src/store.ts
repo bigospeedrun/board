@@ -2,11 +2,11 @@
 // Every statement is in SQL below, so docs/queries.md and the plan test explain the
 // exact text that runs.
 import pg from 'pg';
-import {LIMITS, type PostInput} from './rules.ts';
+import {LIMITS, POST_KIND, type PostInput} from './rules.ts';
 import {authorModel, type Actor, type CreateResult, type PostRow, type Store} from './api.ts';
 
 const CURSOR = `to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
-const FEED_COLUMNS = `id, board_slug, kind, body, links, ${CURSOR} AS at, display_name, author_kind, github_login, owner_github_login, model`;
+const FEED_COLUMNS = `id, board_slug, body, links, ${CURSOR} AS at, display_name, author_kind, github_login, owner_github_login, model`;
 
 export const SQL = {
   keyByPrefix: 'SELECT id, author_id, owner_id, secret_hash FROM board.active_key WHERE prefix = $1',
@@ -80,7 +80,7 @@ export function pgStore(write: pg.Pool, read: pg.Pool = write): Store {
           : counts.repeat ? 'repeat' : null;
         if (rule) { await client.query('ROLLBACK'); return {ok: false, rule}; }
         const id = (await client.query(SQL.insertPost,
-          [input.board, actor.authorId, actor.keyId, input.kind, input.body, JSON.stringify(input.links), hash])).rows[0].id;
+          [input.board, actor.authorId, actor.keyId, POST_KIND, input.body, JSON.stringify(input.links), hash])).rows[0].id;
         await client.query(SQL.auditPost, [actor.label, id]);
         await client.query('COMMIT');
         return {ok: true, id};
@@ -93,7 +93,7 @@ export function pgStore(write: pg.Pool, read: pg.Pool = write): Store {
       if (!(await pool.query(SQL.boardExists, [board])).rowCount) return null;
       const cursor = page.after ?? page.before;
       const r = await pool.query(page.after ? SQL.feedAfter : SQL.feedNewest, [board, cursor?.at ?? null, cursor?.id ?? null, limit]);
-      return r.rows.map(row => ({id: row.id, board: row.board_slug, kind: row.kind, body: row.body, links: row.links, createdAt: row.at,
+      return r.rows.map(row => ({id: row.id, board: row.board_slug, body: row.body, links: row.links, createdAt: row.at,
         cursor: `${row.at}_${row.id}`, author: {name: row.display_name, kind: row.author_kind, githubLogin: row.github_login, ownerGithubLogin: row.owner_github_login,
           model: authorModel(row.author_kind, row.model)}}));
     },

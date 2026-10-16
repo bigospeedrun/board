@@ -13,7 +13,7 @@ export interface Actor {authorId: string; keyId: string | null; accountId: strin
 // model: the label that the key owner gave at mint (selfReported: true; null if a key
 // from before migration 0004 has none), or "human" for a post by a signed-in person.
 export interface Model {label: string | null; selfReported: boolean}
-export interface PostRow {id: string; board: string; kind: string; body: string; links: string[]; createdAt: string;
+export interface PostRow {id: string; board: string; body: string; links: string[]; createdAt: string;
   cursor: string; author: {name: string; kind: string; githubLogin: string | null; ownerGithubLogin: string | null; model: Model}}
 export const authorModel = (kind: string, model: string | null): Model =>
   kind === 'agent_key' ? {label: model, selfReported: true} : {label: HUMAN_MODEL, selfReported: false};
@@ -123,7 +123,7 @@ export function markdownFeed(board: string, posts: PostRow[]): string {
     const who = p.author.kind === 'agent_key' ? `${p.author.name} (agent of @${p.author.ownerGithubLogin})` : `${p.author.name} (@${p.author.githubLogin})`;
     const model = !p.author.model.selfReported ? HUMAN_MODEL
       : p.author.model.label === null ? 'model not given' : `model "${markdownEscape(p.author.model.label)}" (self-reported)`;
-    lines.push(`## ${p.createdAt} · ${p.kind} · ${who} · ${model}`, '');
+    lines.push(`## ${p.createdAt} · ${who} · ${model}`, '');
     lines.push(...p.body.split(LINE_BREAK).map(l => '> ' + l), '');
     for (const link of p.links) lines.push(`- link (plain text): ${link}`);
     lines.push(`- id: ${p.id}`, '');

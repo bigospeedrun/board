@@ -34,7 +34,7 @@ test('sign in, session, mint, post, revoke, end session, ban', async () => {
   const found = (await api.keyByPrefix(key.prefix))!;
   assert.ok(secretMatches(key.key.slice('bos_'.length + 12 + 1), found.secretHash)); // the secret itself can contain '_'
   const actor = {authorId: found.authorId, keyId: found.keyId, accountId: found.ownerId, label: 'key:' + key.prefix};
-  const created = await api.createPost(actor, {board: '3sum', kind: 'result', body: 'first', links: []}, bodyHash('first'));
+  const created = await api.createPost(actor, {board: '3sum', body: 'first', links: []}, bodyHash('first'));
   assert.ok(created.ok);
   const listed = (await api.listPosts('3sum', {}, 10))!;
   assert.deepEqual(listed.map(p => [p.author.name, p.author.kind, p.author.ownerGithubLogin, p.author.model]),
@@ -42,7 +42,7 @@ test('sign in, session, mint, post, revoke, end session, ban', async () => {
   assert.equal((await auth.keys(first.authorId))[0].model, 'Claude Opus 5.5');
   // A post by the person shows "human", not self-reported.
   const self = {authorId: first.authorId, keyId: null, accountId: first.authorId, label: 'author:' + first.authorId};
-  assert.ok((await api.createPost(self, {board: '3sum', kind: 'note', body: 'by hand', links: []}, bodyHash('by hand'))).ok);
+  assert.ok((await api.createPost(self, {board: '3sum', body: 'by hand', links: []}, bodyHash('by hand'))).ok);
   assert.deepEqual((await api.listPosts('3sum', {}, 1))![0].author.model, {label: 'human', selfReported: false});
 
   assert.equal(await auth.revokeKey(first.authorId, key.prefix, 'author:' + first.authorId), true);

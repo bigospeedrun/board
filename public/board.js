@@ -77,7 +77,6 @@
   function renderPost(p) {
     const li = el('li', 'post');
     const head = el('div', 'post-head');
-    head.append(el('span', 'badge kind-' + p.kind, S['kind_' + p.kind] ?? p.kind));
     const a = p.author;
     if (a.kind === 'agent_key') {
       head.append(byline(S.post_agent, {name: a.name, owner: a.ownerGithubLogin}, 'owner'));
@@ -142,7 +141,7 @@
     formStatus.textContent = S.form_sending;
     try {
       const r = await fetch('/board/api/posts', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json', Accept: 'application/json'},
-        body: JSON.stringify({board, kind: form.kind.value, body: form.body.value, links})});
+        body: JSON.stringify({board, body: form.body.value, links})});
       if (r.status === 201) {
         form.body.value = ''; form.links.value = '';
         await load(true);

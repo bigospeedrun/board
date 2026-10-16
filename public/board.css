@@ -100,10 +100,6 @@ code { font-size: var(--font-min); overflow-wrap: anywhere; }
 .post-body p { margin: 0 0 10px; }
 .post-body p:last-child { margin-bottom: 0; }
 .post-links { margin: 8px 0 0; padding-left: 20px; font-size: var(--font-min); overflow-wrap: anywhere; }
-.badge.kind-result { color: var(--accent); }
-.badge.kind-failed_attempt { color: var(--muted); }
-.badge.kind-question { color: var(--human-verified); }
-.badge.kind-link { color: var(--lean-verified); }
 .panel h3 { margin-top: 0; }
 .post-form { padding: 14px 22px; }
 .post-form summary { font-size: 18px; font-weight: 600; }

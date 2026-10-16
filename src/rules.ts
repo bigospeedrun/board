@@ -37,7 +37,10 @@ export function configFrom(env: NodeJS.ProcessEnv): Config {
   return {writes: writes === 'on', origin, minAccountAgeDays: Number(age)};
 }
 
-export const KINDS = ['note', 'result', 'failed_attempt', 'question', 'link'] as const;
+// Posts have no category (Nil, 2026-10-15). The post.kind column from migration 0001 stays
+// until a later migration drops it (a migration takes the deploy's backup-wait path); until
+// then the app writes this constant into it, and nothing reads it.
+export const POST_KIND = 'note';
 
 // Path words of the board host under /board/: a board with one of these slugs would sit at
 // the same path as the API, the sign-in pages or the static files. scripts/sync-boards.ts
@@ -48,10 +51,9 @@ export const RESERVED_SLUGS: readonly string[] = ['api', 'auth', 'assets'];
 export const postSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['board', 'kind', 'body'],
+  required: ['board', 'body'],
   properties: {
     board: {type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,62}$'},
-    kind: {enum: [...KINDS]},
     body: {type: 'string', minLength: 1, maxLength: LIMITS.bodyChars},
     links: {type: 'array', maxItems: LIMITS.links, uniqueItems: true,
             items: {type: 'string', maxLength: LIMITS.linkChars, pattern: '^https://[^\\s<>"]+$'}},
@@ -61,7 +63,7 @@ export const postSchema = {
 const ajv = new Ajv({strict: true, allErrors: false});
 export const validatePost = ajv.compile(postSchema);
 
-export interface PostInput {board: string; kind: typeof KINDS[number]; body: string; links: string[]}
+export interface PostInput {board: string; body: string; links: string[]}
 
 // No HTML and no images: the board shows plain text only.
 // Line breaks other than \n, bidi controls and zero-width characters can hide or

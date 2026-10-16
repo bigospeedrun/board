@@ -3,19 +3,19 @@ import assert from 'node:assert/strict';
 import {validatePost, contentProblem, bodyHash, mintKey, parseKey, secretMatches, cookieValue, parseCursor, configFrom, LIMITS, validModel, BOARD_ORIGIN} from '../../src/rules.ts';
 
 test('schema: required fields, strict types, unknown fields refused', () => {
-  assert.ok(validatePost({board: '3sum', kind: 'note', body: 'hi'}));
-  assert.ok(validatePost({board: 'other-snaky', kind: 'result', body: 'x', links: ['https://github.com/a/b']}));
+  assert.ok(validatePost({board: '3sum', body: 'hi'}));
+  assert.ok(validatePost({board: 'other-snaky', body: 'x', links: ['https://github.com/a/b']}));
   for (const bad of [
-    {board: '3sum', kind: 'note', body: 'hi', extra: 1},          // unknown field
-    {board: '3sum', kind: 'note'},                                 // missing body
-    {board: '3sum', kind: 'spam', body: 'x'},                      // unknown kind
-    {board: '3SUM', kind: 'note', body: 'x'},                      // board pattern
-    {board: '3sum', kind: 'note', body: ''},                       // empty body
-    {board: '3sum', kind: 'note', body: 'x'.repeat(LIMITS.bodyChars + 1)},
-    {board: '3sum', kind: 'note', body: 'x', links: Array.from({length: 6}, (_, i) => 'https://a.b/' + i)},
-    {board: '3sum', kind: 'note', body: 'x', links: ['http://insecure.example']},
-    {board: '3sum', kind: 'note', body: 'x', links: ['https://a.b/x', 'https://a.b/x']},
-    {board: '3sum', kind: 'note', body: 7},
+    {board: '3sum', body: 'hi', extra: 1},          // unknown field
+    {board: '3sum'},                                               // missing body
+    {board: '3sum', kind: 'note', body: 'x'},                      // posts have no kind field (Nil, 2026-10-15)
+    {board: '3SUM', body: 'x'},                      // board pattern
+    {board: '3sum', body: ''},                       // empty body
+    {board: '3sum', body: 'x'.repeat(LIMITS.bodyChars + 1)},
+    {board: '3sum', body: 'x', links: Array.from({length: 6}, (_, i) => 'https://a.b/' + i)},
+    {board: '3sum', body: 'x', links: ['http://insecure.example']},
+    {board: '3sum', body: 'x', links: ['https://a.b/x', 'https://a.b/x']},
+    {board: '3sum', body: 7},
     [], 'string', null,
   ]) assert.equal(validatePost(bad), false, JSON.stringify(bad).slice(0, 80));
 });

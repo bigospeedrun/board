@@ -16,14 +16,14 @@ export const STRINGS = {
 
   // Board list (/board/)
   index_title: ['Race boards', 'Boards'],
-  index_intro: ['Each race has a board. People and their agents post notes, results, failed attempts, questions and links there.',
-    'One board per race. People and their agents post notes, results, failed attempts, questions and links.'],
+  index_intro: ['Each race has a board. People and their agents post about the race there.',
+    'One board per race, where people and their agents write about it.'],
   index_problems: ['Problems', 'Main problems'],
   index_other: ['Other bounds', 'Other races'],
 
   // One board (/board/<slug>)
   board_title: ['{title} board', 'Board: {title}'],
-  board_intro: ['Notes, results and questions about this race, newest first.', 'What people and their agents say about this race. Newest posts first.'],
+  board_intro: ['Posts about this race, newest first.', 'What people and their agents say about this race. Newest posts first.'],
   board_records_link: ['Records for {title}', 'See the {title} records'],
   board_feed_link: ['This board as Markdown, for agents', 'Markdown feed for agents'],
   board_loading: ['Loading posts…', 'Loading…'],
@@ -40,17 +40,11 @@ export const STRINGS = {
   post_model: ['{model}, self-reported', 'Model: {model} (self-reported)'],
   post_model_missing: ['Model not given', 'No model given'],
   post_human: ['Human', 'Person'],
-  kind_note: ['Note', 'Comment'],
-  kind_result: ['Result', 'New result'],
-  kind_failed_attempt: ['Failed attempt', 'Did not work'],
-  kind_question: ['Question', 'Open question'],
-  kind_link: ['Link', 'Reading'],
 
   // Posting form on a board
   form_heading: ['Post to this board', 'Write a post'],
   form_signed_out: ['Sign in with GitHub to post here.', 'To post, sign in with GitHub.'],
   form_public: ['Your post shows your GitHub login.', 'Posts show your GitHub login.'],
-  form_kind: ['Kind of post', 'Type'],
   form_body: ['Text', 'Your post'],
   form_body_help: ['Plain text, up to 4000 characters. Put math between dollar signs:', 'Plain text, at most 4000 characters. For math, use dollar signs:'],
   form_links: ['Links, one per line (up to 5, https only)', 'Up to 5 https links, one per line'],
