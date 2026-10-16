@@ -10,77 +10,87 @@
 # Only the three public endpoints and the read-only pages pass (GET/HEAD /board/,
 # /board/<slug>, /board/assets/*, all from board-api); every other path and method on this
 # host is 404. / sends people to the board list.
+# The Cloudflare gate (the cloudflare_only snippet of the shared Caddy: abort every peer
+# outside the Cloudflare ranges) is the first step of this file's route block. It must be
+# in the route: in a site block, Caddy runs abort after handle, so a top-level
+# "import cloudflare_only" next to these handle blocks never runs (found on the VPS,
+# 2026-10-16). Port 80 (ACME HTTP-01) does not use these routes, so it is not gated.
 # Caddy reaches the services through unix sockets in /run/bigospeedrun-board/{api,auth}
 # (group wg-caddy). Body caps match the apps: 8 KiB = 8192 bytes, 2 KiB = 2048 bytes.
-handle /board/* {
-	@post_api {
-		method POST
-		path /board/api/posts
-		header Content-Type application/json*
-	}
-	handle @post_api {
-		request_body {
-			max_size 8KiB
+route {
+	# First: every route below is for Cloudflare peers only.
+	import cloudflare_only
+
+	handle /board/* {
+		@post_api {
+			method POST
+			path /board/api/posts
+			header Content-Type application/json*
 		}
-		reverse_proxy unix//run/bigospeedrun-board/api/api.sock {
-			header_up X-Forwarded-For {client_ip}
+		handle @post_api {
+			request_body {
+				max_size 8KiB
+			}
+			reverse_proxy unix//run/bigospeedrun-board/api/api.sock {
+				header_up X-Forwarded-For {client_ip}
+			}
+		}
+
+		@read_api {
+			method GET HEAD
+			path /board/api/posts
+		}
+		handle @read_api {
+			reverse_proxy unix//run/bigospeedrun-board/api/api.sock
+		}
+
+		@pages {
+			method GET HEAD
+			path /board/ /board/assets/*
+		}
+		handle @pages {
+			reverse_proxy unix//run/bigospeedrun-board/api/api.sock
+		}
+
+		@board_page {
+			method GET HEAD
+			path_regexp ^/board/[a-z0-9][a-z0-9-]{0,62}$
+		}
+		handle @board_page {
+			reverse_proxy unix//run/bigospeedrun-board/api/api.sock
+		}
+
+		@auth_get {
+			method GET
+			path /board/auth/login /board/auth/callback /board/auth/account /board/auth/
+		}
+		handle @auth_get {
+			reverse_proxy unix//run/bigospeedrun-board/auth/auth.sock
+		}
+
+		@auth_post {
+			method POST
+			path /board/auth/keys /board/auth/keys/revoke /board/auth/logout
+		}
+		handle @auth_post {
+			request_body {
+				max_size 2KiB
+			}
+			reverse_proxy unix//run/bigospeedrun-board/auth/auth.sock
+		}
+
+		handle {
+			respond 404
 		}
 	}
 
-	@read_api {
-		method GET HEAD
-		path /board/api/posts
-	}
-	handle @read_api {
-		reverse_proxy unix//run/bigospeedrun-board/api/api.sock
+	# The host's root: the board list.
+	handle / {
+		redir * /board/ 302
 	}
 
-	@pages {
-		method GET HEAD
-		path /board/ /board/assets/*
-	}
-	handle @pages {
-		reverse_proxy unix//run/bigospeedrun-board/api/api.sock
-	}
-
-	@board_page {
-		method GET HEAD
-		path_regexp ^/board/[a-z0-9][a-z0-9-]{0,62}$
-	}
-	handle @board_page {
-		reverse_proxy unix//run/bigospeedrun-board/api/api.sock
-	}
-
-	@auth_get {
-		method GET
-		path /board/auth/login /board/auth/callback /board/auth/account /board/auth/
-	}
-	handle @auth_get {
-		reverse_proxy unix//run/bigospeedrun-board/auth/auth.sock
-	}
-
-	@auth_post {
-		method POST
-		path /board/auth/keys /board/auth/keys/revoke /board/auth/logout
-	}
-	handle @auth_post {
-		request_body {
-			max_size 2KiB
-		}
-		reverse_proxy unix//run/bigospeedrun-board/auth/auth.sock
-	}
-
+	# Everything else outside /board/ on this host.
 	handle {
 		respond 404
 	}
-}
-
-# The host's root: the board list.
-handle / {
-	redir * /board/ 302
-}
-
-# Everything else outside /board/ on this host.
-handle {
-	respond 404
 }

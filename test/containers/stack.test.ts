@@ -31,7 +31,7 @@ const compose = (args: string[], extraEnv: Record<string, string> = {}) => {
 };
 const exec = (service: string, ...cmd: string[]) =>
   spawnSync('docker', ['compose', '-p', project, ...files, 'exec', '-T', service, ...cmd], {env, encoding: 'utf8'});
-let base = '', key = '';
+let base = '', gated = '', key = '';
 
 before(async () => {
   execFileSync('docker', ['build', '-q', '-f', join(BOARD, 'Dockerfile'), '-t', IMAGE, BOARD], {stdio: 'ignore'});
@@ -49,10 +49,16 @@ before(async () => {
   execFileSync('docker', ['run', '--rm', '--network', 'none', '--user', '0:0', '-v', `${secrets}:/s`, '--entrypoint', 'sh', CADDY, '-c',
     Object.entries(SECRET_GROUPS).map(([name, gid]) => `chown 0:${gid} /s/${name} && chmod 0440 /s/${name}`).join(' && ')], {stdio: 'ignore'});
   // Same shape as production (board.bigospeedrun.com { import board.caddy }), on plain :8080.
-  writeFileSync(join(work, 'Caddyfile'), `{\n\tadmin off\n\tauto_https off\n\tstorage file_system /tmp/caddy\n}\n:8080 {\n\timport /etc/caddy/board.caddy\n}\n`);
-  // Test-only front: Caddy with the production board.caddy, published on a random local port.
-  writeFileSync(join(work, 'test.override.yml'), `services:
-  board-caddy:
+  // The cloudflare_only snippet has the shape of the shared one on the VPS
+  // (/etc/wg-caddy/cloudflare-ips.caddy); only the trusted ranges differ. board-caddy trusts
+  // the private ranges (the test peer), so requests pass; board-caddy-gated trusts only
+  // TEST-NET-1 (192.0.2.0/24), so the test peer is not Cloudflare and must be aborted.
+  const caddyfile = (trusted: string) => `{\n\tadmin off\n\tauto_https off\n\tstorage file_system /tmp/caddy\n}\n` +
+    `(cloudflare_only) {\n\t@not_cloudflare not remote_ip ${trusted}\n\tabort @not_cloudflare\n}\n:8080 {\n\timport /etc/caddy/board.caddy\n}\n`;
+  writeFileSync(join(work, 'Caddyfile'), caddyfile('private_ranges'));
+  writeFileSync(join(work, 'Caddyfile.gated'), caddyfile('192.0.2.0/24'));
+  // Test-only fronts: Caddy with the production board.caddy, published on random local ports.
+  const front = (name: string, file: string) => `  ${name}:
     image: ${CADDY}
     user: '10001:10001'           # test only: the socket dirs cannot carry wg-caddy's group here,
     group_add: ['10002']          # so this Caddy joins the api (10001) and auth (10002) groups
@@ -63,16 +69,18 @@ before(async () => {
     command: [caddy, run, --config, /etc/caddy/Caddyfile, --adapter, caddyfile]
     ports: ['127.0.0.1::8080']
     volumes:
-      - ${join(work, 'Caddyfile')}:/etc/caddy/Caddyfile:ro
+      - ${join(work, file)}:/etc/caddy/Caddyfile:ro
       - ${join(BOARD, 'deploy/board.caddy')}:/etc/caddy/board.caddy:ro
       - ${apiSockets}:/run/bigospeedrun-board/api
       - ${authSockets}:/run/bigospeedrun-board/auth
     depends_on:
       board-api: {condition: service_healthy}
       board-auth: {condition: service_healthy}
-`);
-  compose(['up', '-d', '--wait', '--wait-timeout', '120', 'board-db', 'board-api', 'board-auth', 'board-egress', 'board-caddy']);
+`;
+  writeFileSync(join(work, 'test.override.yml'), 'services:\n' + front('board-caddy', 'Caddyfile') + front('board-caddy-gated', 'Caddyfile.gated'));
+  compose(['up', '-d', '--wait', '--wait-timeout', '120', 'board-db', 'board-api', 'board-auth', 'board-egress', 'board-caddy', 'board-caddy-gated']);
   base = 'http://' + compose(['port', 'board-caddy', '8080']).trim();
+  gated = 'http://' + compose(['port', 'board-caddy-gated', '8080']).trim();
   // Test-only key: a one-off owner-role container (no network) inserts a person and a key.
   const script = `import pg from 'pg'; import {mintKey} from './src/rules.ts'; import {readFileSync} from 'node:fs';
     const c = new pg.Client({password: readFileSync('/run/secrets/owner_password','utf8').trim()}); await c.connect();
@@ -131,6 +139,20 @@ test('pages through Caddy: the list, a board, an asset; / goes to the list; page
   assert.equal(css.status, 200); assert.match(css.headers.get('content-type') ?? '', /^text\/css/);
   for (const [method, path] of [['POST', '/board/3sum'], ['PUT', '/board/'], ['POST', '/board/assets/board.css'], ['GET', '/board/3sum/x'], ['GET', '/board/BAD']])
     assert.equal((await fetch(base + path, {method})).status, 404, `${method} ${path}`);
+});
+
+test('Cloudflare gate: a peer outside the trusted ranges is aborted on every route; a trusted peer passes', async () => {
+  const routes: [string, string, RequestInit?][] = [['GET', '/'], ['GET', '/board/'], ['GET', '/board/3sum'], ['GET', '/board/assets/board.css'],
+    ['GET', '/board/api/posts?board=3sum'], ['GET', '/board/auth/login'], ['GET', '/board/auth/account'], ['GET', '/nothing'],
+    ['POST', '/board/api/posts', {headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + key}, body: JSON.stringify({board: '3sum', kind: 'note', body: 'gate'})}],
+    ['POST', '/board/auth/logout', {headers: {Origin: 'https://board.bigospeedrun.com'}}]];
+  for (const [method, path, init] of routes) {
+    // abort closes the connection with no response, so fetch rejects (curl: exit 52 / 92).
+    await assert.rejects(fetch(gated + path, {method, redirect: 'manual', ...init}), `${method} ${path} must be aborted`);
+  }
+  // The front that trusts the test peer serves them (every other test uses it too).
+  assert.equal((await fetch(base + '/board/')).status, 200);
+  assert.equal((await fetch(base + '/', {redirect: 'manual'})).status, 302);
 });
 
 test('item 11: forbidden paths and methods fail (404)', async () => {
