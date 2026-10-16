@@ -63,9 +63,11 @@ esac
 writeFileSync(join(fake, 'probe'), `#!/usr/bin/env bash
 d=$(cat ${fake}/running); grep -qx "$d" ${fake}/unhealthy && exit 1; echo "$d"
 `, {mode: 0o755});
-// The socket check fails while fake/socket-bad exists.
-writeFileSync(join(fake, 'socket-check'), `#!/usr/bin/env bash
-[[ ! -e ${fake}/socket-bad ]]
+// The socket script fails while fake/socket-bad exists (a wg-caddy gid mismatch), and
+// reports a repair while fake/socket-fixed exists, as socket-dirs.sh does.
+writeFileSync(join(fake, 'socket-dirs'), `#!/usr/bin/env bash
+[[ ! -e ${fake}/socket-bad ]] || exit 1
+[[ ! -e ${fake}/socket-fixed ]] || printf 'fixed /run/bigospeedrun-board/api: was 0:0 2770, now 0:64543 2770\\nfixed /run/bigospeedrun-board/auth: was 0:0 2770, now 0:64543 2770\\n'
 `, {mode: 0o755});
 // What the dump program writes after a pull by the backup host.
 const pulled = (when: Date) => writeFileSync(marker, JSON.stringify({snapshot_utc: when.toISOString().replace(/\.\d+Z$/, 'Z')}) + '\n');
@@ -98,7 +100,7 @@ function tick(): Promise<{status: Record<string, unknown>; output: string}> {
   return new Promise(done => {
     const child = spawn('bash', [script], {env: {PATH: process.env.PATH, BOARD_ROOT: root, BOARD_ENV_DIR: envDir, BOARD_UNIT_DIR: units,
       BOARD_DOCKER: join(fake, 'docker'), BOARD_PROBE: join(fake, 'probe'), BOARD_REGISTRY: base(), BOARD_GITHUB_API: base(),
-      BOARD_PULL_MARKER: marker, BOARD_SOCKET_CHECK: join(fake, 'socket-check')}});
+      BOARD_PULL_MARKER: marker, BOARD_SOCKET_DIRS: join(fake, 'socket-dirs')}});
     let output = '';
     child.stdout.on('data', chunk => output += chunk); child.stderr.on('data', chunk => output += chunk);
     child.on('close', () => done({status: JSON.parse(readFileSync(join(root, 'auto-deploy/status.json'), 'utf8')), output}));
@@ -173,7 +175,17 @@ test('a migration marked -- manual stops until the operator allows that digest, 
   assert.equal(status.deployed, commit(4));
 });
 
-test('socket directories that do not match wg-caddy deploy nothing', async () => {
+test('socket directories are repaired by the tick, with one log line, and the tick goes on', async () => {
+  writeFileSync(join(fake, 'socket-fixed'), '');
+  const {status, output} = await tick();
+  assert.equal(status.result, 'up_to_date');
+  assert.equal(status.tick_error_since, null);
+  assert.match(output, /socket directories repaired: fixed \/run\/bigospeedrun-board\/api: was 0:0 2770, now 0:64543 2770; fixed \/run\/bigospeedrun-board\/auth/);
+  rmSync(join(fake, 'socket-fixed'));
+  assert.doesNotMatch((await tick()).output, /repaired/);
+});
+
+test('a socket repair that fails (wg-caddy gid mismatch) deploys nothing', async () => {
   writeFileSync(join(fake, 'socket-bad'), '');
   mainDigest = digest(5);
   const {status} = await tick();

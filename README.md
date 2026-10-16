@@ -184,8 +184,9 @@ the pull).
 **Socket directories.** wg-caddy is a DynamicUser unit, so its gid is not fixed and its
 name resolves only while it runs. `deploy/socket-dirs.sh` (before each start of
 `bigospeedrun-board.service`) resolves the group by name and sets
-`/run/bigospeedrun-board/{api,auth}` to `root:<gid>` mode 2770; every deploy tick runs it
-with `--check` (a mismatch is a `tick_error`). Both fail when the gid differs from
+`/run/bigospeedrun-board/{api,auth}` to `root:<gid>` mode 2770. Every deploy tick runs it
+too, so it repairs the directories within 5 minutes and logs one line when it changed
+something (a systemd upgrade reset them to root:root on 2026-10-16). Both fail when the gid differs from
 `BOARD_SOCKET_GID` in `release.env`, which the containers join: then set the new value and
 restart the board. The hold file is
 `/etc/bigospeedrun/board-auto-deploy.hold`. `test/unit/auto-deploy.test.ts` covers the

@@ -41,8 +41,11 @@
 # tick_error_since is kept while ticks fail (tick_error) and deleted by the first tick that
 # gets past its reads with any other result.
 #
-# Every tick also checks the socket directories (socket-dirs.sh --check): their group must
-# be wg-caddy's gid now, which is dynamic (DynamicUser), and equal BOARD_SOCKET_GID.
+# Every tick also repairs the socket directories (socket-dirs.sh): root:<wg-caddy gid> 2770
+# is the only right state, so the tick sets it and logs one line when it changed something
+# (on 2026-10-16 a systemd upgrade reset them to root:root and Caddy got 502 until a person
+# ran the script). wg-caddy's gid is dynamic (DynamicUser) and must equal BOARD_SOCKET_GID;
+# a mismatch needs a person (a new BOARD_SOCKET_GID and a restart), so it stays tick_error.
 #
 # Per-host values come from $env_dir/board-auto-deploy.env (0600), plain KEY=value, never run:
 #   BOARD_IMAGE_REPO      ghcr.io/bigospeedrun/board
@@ -56,7 +59,7 @@
 # For a local run and the tests: BOARD_ROOT, BOARD_ENV_DIR, BOARD_UNIT_DIR, BOARD_SYSTEMCTL,
 # BOARD_DOCKER, BOARD_REGISTRY, BOARD_GITHUB_API, BOARD_PROBE (a command that prints the
 # running image digest, instead of asking Docker), BOARD_SOCKET_DIR, BOARD_PULL_MARKER,
-# BOARD_SOCKET_CHECK (a command instead of socket-dirs.sh --check).
+# BOARD_SOCKET_DIRS (a command instead of socket-dirs.sh).
 set -euo pipefail
 umask 077
 
@@ -71,7 +74,7 @@ main() {
   sockets=${BOARD_SOCKET_DIR:-/run/bigospeedrun-board}
   pull_marker=${BOARD_PULL_MARKER:-/var/lib/bos-board-backup/last-pull.json}
   here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
-  socket_check=${BOARD_SOCKET_CHECK:-$here/socket-dirs.sh --check}
+  socket_dirs=${BOARD_SOCKET_DIRS:-$here/socket-dirs.sh}
   state=$root/auto-deploy
 
   result=error phase=start target="" deployed="" waiting=false units=unchecked migration_added=false
@@ -106,10 +109,12 @@ main() {
     return 0
   }
 
-  if ! $socket_check >/dev/null; then
-    tick_error sockets "the socket directories do not match wg-caddy's group (socket-dirs.sh --check)"
+  local fixed
+  if ! fixed=$($socket_dirs); then
+    tick_error sockets "the socket directories cannot get wg-caddy's group (socket-dirs.sh failed)"
     return 0
   fi
+  [[ -z $fixed ]] || say "socket directories repaired: ${fixed//$'\n'/; }"
   select_target || {
     clear_tick_error
     return 0
