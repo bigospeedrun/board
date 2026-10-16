@@ -2,7 +2,7 @@
 // case needs root-owned directories, so it is checked on the VPS (plan E1), not here.
 import {test, after} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, mkdirSync, writeFileSync, rmSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
@@ -38,4 +38,16 @@ test('--check fails on a directory that is not root:<gid> 2770', () => {
   const r = run('wg-caddy:x:64543:', '64543', '--check');
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /run\/api is not root:64543 mode 2770/);
+});
+
+test('tmpfiles creates the socket directories but never changes an existing one', () => {
+  // systemd-tmpfiles --create runs again after boot (for example in a systemd upgrade).
+  // A ":" prefix applies the mode, user and group only on creation (tmpfiles.d(5)), so the
+  // wg-caddy group that socket-dirs.sh set stays.
+  const conf = readFileSync(new URL('../../deploy/bigospeedrun-board.tmpfiles.conf', import.meta.url), 'utf8');
+  const lines = conf.split('\n').filter(l => l.trim() && !l.startsWith('#')).map(l => l.trim().split(/\s+/));
+  for (const name of ['api', 'auth']) {
+    const line = lines.find(f => f[1] === `/run/bigospeedrun-board/${name}`);
+    assert.deepEqual(line, ['d', `/run/bigospeedrun-board/${name}`, ':2770', ':root', ':root', '-'], name);
+  }
 });

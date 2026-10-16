@@ -135,7 +135,7 @@ phase E plan). The files here:
 | `deploy/bigospeedrun-board-autodeploy.{service,timer}` | `/etc/systemd/system/` | a tick five minutes after the last one ends |
 | `deploy/bigospeedrun-board.service` | `/etc/systemd/system/` | `socket-dirs.sh`, then `compose up --wait` at boot |
 | `deploy/socket-dirs.sh` | `/opt/bigospeedrun-board/ops/socket-dirs.sh` | gives the socket directories wg-caddy's group by name (below) |
-| `deploy/bigospeedrun-board.tmpfiles.conf` | `/etc/tmpfiles.d/bigospeedrun-board.conf` | makes the socket directories early at boot (group root) |
+| `deploy/bigospeedrun-board.tmpfiles.conf` | `/etc/tmpfiles.d/bigospeedrun-board.conf` | makes the socket directories early at boot (group root); the ":" prefixes leave an existing directory unchanged |
 | `deploy/board-auto-deploy.env.example` | `/etc/bigospeedrun/board-auto-deploy.env` | image, repo and workflow names (no secrets) |
 | `deploy/board.site.caddy` | `/etc/wg-caddy/board.caddy` | the site block of `board.bigospeedrun.com` |
 | `deploy/board.caddy` | `/etc/wg-caddy/board-routes.caddy` | the routes (imported by the site block) |
