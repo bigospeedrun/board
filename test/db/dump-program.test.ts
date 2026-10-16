@@ -1,12 +1,14 @@
 // deploy/backup/bos-board-backup-dump on a real Postgres 18.6 container that carries the
 // compose labels the program looks for. The program runs with its own code; only the
 // constants that name this test's container, password file, lock and age key change.
-// Needs Docker and `age` (CI installs it; the test is skipped without it).
+// Needs Docker and `age` (CI installs it; the test is skipped without it). For the bosbackup
+// login the program waits after the stream for the backup host's acknowledgement (the
+// ciphertext SHA-256) and writes the pull marker only on an exact match.
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
-import {spawnSync} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import {mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync} from 'node:fs';
-import {randomBytes} from 'node:crypto';
+import {randomBytes, createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {startDb, type TestDb} from './pg.ts';
@@ -38,20 +40,44 @@ after(() => { db?.stop(); rmSync(work, {recursive: true, force: true}); });
 
 // Run the program as a module with this test's constants, as root would run it on the VPS.
 const marker = join(work, 'marker', 'last-pull.json');
-function runProgram(password = join(work, 'dump_password'), sudoUser = 'bosbackup') {
+// The SHA-256 of dump.age in a stream, as the backup host computes it after its checks.
+function cipherSha(stream: Buffer) {
+  writeFileSync(join(work, 'ack-stream.tar'), stream);
+  return createHash('sha256').update(spawnSync('tar', ['-xOf', join(work, 'ack-stream.tar'), 'dump.age'], {maxBuffer: 64 << 20}).stdout).digest('hex');
+}
+// answer, once the stream has ended: 'ack' the right hash, a 'wrong' one, 'none' (end of
+// input), or 'silent' (stdin stays open; the program's own ACK_SECONDS ends the wait).
+type Answer = 'ack' | 'wrong' | 'none' | 'silent';
+function runProgram(password = join(work, 'dump_password'), sudoUser = 'bosbackup', answer: Answer = 'ack', ackSeconds = 900):
+  Promise<{status: number | null; stdout: Buffer; stderr: string}> {
   const driver = `
 import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader('dump', sys.argv[1])
 spec = importlib.util.spec_from_loader('dump', loader); m = importlib.util.module_from_spec(spec); loader.exec_module(m)
 m.COMPOSE_PROJECT, m.PASSWORD_FILE, m.LOCK_FILE, m.AGE_RECIPIENT, m.WORK_PARENT, m.DOCKER, m.AGE, m.PULL_MARKER = sys.argv[2:10]
+m.ACK_SECONDS = float(sys.argv[10])
 sys.argv = sys.argv[:1]
 m.main()`;
-  return spawnSync('python3', ['-I', '-B', '-c', driver, program, project, password, join(work, 'lock'), recipient, work, 'docker', 'age', marker],
-    {maxBuffer: 64 << 20, env: {...process.env, SUDO_USER: sudoUser}});
+  return new Promise(done => {
+    const child = spawn('python3', ['-I', '-B', '-c', driver, program, project, password, join(work, 'lock'), recipient, work, 'docker', 'age', marker, String(ackSeconds)],
+      {env: {...process.env, SUDO_USER: sudoUser}});
+    const out: Buffer[] = [];
+    let stderr = '';
+    child.stdin.on('error', () => {});   // an answer to a program that already ended
+    child.stdout.on('data', chunk => out.push(chunk));
+    child.stderr.on('data', chunk => stderr += chunk);
+    child.stdout.on('end', () => {
+      if (answer === 'ack') child.stdin.end(cipherSha(Buffer.concat(out)) + '\n');
+      else if (answer === 'wrong') child.stdin.end('0'.repeat(64) + '\n');
+      else if (answer === 'none') child.stdin.end();
+    });
+    child.on('close', status => { child.stdin.destroy(); done({status, stdout: Buffer.concat(out), stderr}); });
+  });
 }
 
-test('the dump program streams meta.json and an encrypted custom-format dump of the board', {skip: !hasAge && 'age is not installed'}, () => {
-  const run = runProgram();
+test('the dump program streams meta.json and an encrypted custom-format dump of the board', {skip: !hasAge && 'age is not installed'}, async () => {
+  rmSync(marker, {force: true});
+  const run = await runProgram();
   assert.equal(run.status, 0, String(run.stderr));
   assert.doesNotMatch(String(run.stderr) + String(run.stdout.subarray(0, 4096)), new RegExp(db.passwords.board_dump));
   writeFileSync(join(work, 'stream.tar'), run.stdout);
@@ -80,20 +106,37 @@ test('the dump program streams meta.json and an encrypted custom-format dump of 
   assert.equal(list.status, 0, list.stderr);
   assert.match(list.stdout, /TABLE DATA board post /);
   assert.match(list.stdout, /TABLE DATA board_meta migration /);
-  // A run by the bosbackup login leaves the pull marker that the deploy tick reads.
-  assert.equal(JSON.parse(readFileSync(marker, 'utf8')).snapshot_utc, meta.snapshot_utc);
+  // A run by the bosbackup login, acknowledged with the ciphertext SHA-256, leaves the pull
+  // marker that the deploy tick reads.
+  const pulled = JSON.parse(readFileSync(marker, 'utf8'));
+  assert.equal(pulled.snapshot_utc, meta.snapshot_utc);
+  assert.equal(pulled.ciphertext_sha256, meta.ciphertext.sha256);
+  assert.match(run.stderr, /ack ok/);
 });
 
-test('a run by another sudo user leaves no pull marker', {skip: !hasAge && 'age is not installed'}, () => {
+test('a bosbackup run with no acknowledgement, a wrong hash or no line in time leaves no pull marker', {skip: !hasAge && 'age is not installed'}, async () => {
+  const cases: [Answer, number, RegExp][] = [['none', 900, /NO ACK end of input/], ['wrong', 900, /NO ACK the acknowledgement is not/], ['silent', 2, /NO ACK no line within/]];
+  for (const [answer, seconds, why] of cases) {
+    rmSync(marker, {force: true});
+    const run = await runProgram(join(work, 'dump_password'), 'bosbackup', answer, seconds);
+    assert.equal(run.status, 3, answer + ': ' + run.stderr);
+    assert.match(run.stderr, why);
+    assert.equal(existsSync(marker), false, answer);
+    // The stream itself was whole.
+    assert.equal(cipherSha(run.stdout).length, 64);
+  }
+});
+
+test('a run by another sudo user does not wait and leaves no pull marker', {skip: !hasAge && 'age is not installed'}, async () => {
   rmSync(marker, {force: true});
-  const run = runProgram(join(work, 'dump_password'), 'wgadmin');
+  const run = await runProgram(join(work, 'dump_password'), 'wgadmin', 'silent');
   assert.equal(run.status, 0, String(run.stderr));
   assert.equal(existsSync(marker), false);
 });
 
-test('a wrong dump password makes no dump', {skip: !hasAge && 'age is not installed'}, () => {
+test('a wrong dump password makes no dump', {skip: !hasAge && 'age is not installed'}, async () => {
   writeFileSync(join(work, 'wrong_password'), 'wrong-password-0123456789abcdef\n', {mode: 0o600});
-  const run = runProgram(join(work, 'wrong_password'));
+  const run = await runProgram(join(work, 'wrong_password'));
   assert.notEqual(run.status, 0);
   assert.equal(run.stdout.length, 0);
 });

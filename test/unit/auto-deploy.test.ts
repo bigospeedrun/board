@@ -3,7 +3,7 @@
 // The cases follow the site's src/lib/self-host-deploy.test.ts, plus the migration guard.
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, existsSync, rmSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, existsSync, rmSync, cpSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer, type Server} from 'node:http';
@@ -13,7 +13,7 @@ import type {AddressInfo} from 'node:net';
 const script = new URL('../../deploy/auto-deploy.sh', import.meta.url).pathname;
 const dir = mkdtempSync(join(tmpdir(), 'board-deploy-'));
 const root = join(dir, 'root'), envDir = join(dir, 'etc'), fake = join(dir, 'fake'), units = join(dir, 'units'), marker = join(dir, 'last-pull.json');
-for (const path of [root, fake, units, join(fake, 'labels'), join(fake, 'migrations')]) mkdirSync(path, {recursive: true});
+for (const path of [root, fake, units, join(fake, 'labels'), join(fake, 'images')]) mkdirSync(path, {recursive: true});
 mkdirSync(envDir, {mode: 0o700});
 const envLines = 'BOARD_IMAGE_REPO=ghcr.io/bigospeedrun/board\nBOARD_GITHUB_REPO=bigospeedrun/board\nBOARD_IMAGE_WORKFLOW=image.yml\n';
 writeFileSync(join(envDir, 'board-auto-deploy.env'), envLines, {mode: 0o600});
@@ -22,7 +22,18 @@ const commit = (n: number) => String(n).repeat(40).slice(0, 40);
 for (const n of [1, 2, 3, 4, 5, 6, 7, 8, 9]) writeFileSync(join(fake, 'labels', digest(n)), commit(n));
 const rehearsalBad = 'sha256:' + 'a'.repeat(64);
 writeFileSync(join(fake, 'labels', rehearsalBad), 'a'.repeat(40));
-const base5 = '0001_schema.sql\t-- schema\n0005_dump_role.sql\t-- backup role\n';
+// Each fake image is a directory fake/images/<digest>/db/migrations (fake/images/base for
+// any other digest); `docker run` runs the tick's own list command in it.
+const base5: Record<string, string> = {'0001_schema.sql': '-- schema\nCREATE SCHEMA x;\n', '0005_dump_role.sql': '-- backup role\n'};
+const imageDir = (d: string) => join(fake, 'images', d);
+function image(n: number | string, files: Record<string, string>, from?: number) {
+  const d = typeof n === 'number' ? digest(n) : n, dir = join(imageDir(d), 'db/migrations');
+  rmSync(imageDir(d), {recursive: true, force: true});
+  if (from !== undefined) cpSync(imageDir(digest(from)), imageDir(d), {recursive: true});
+  mkdirSync(dir, {recursive: true});
+  for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
+}
+image('base', base5);
 writeFileSync(join(root, 'compose.board.yml'), 'services: {}\n');
 writeFileSync(join(root, 'release.env'), `BOARD_SOCKET_GID=64543\nBOARD_WRITES=off\nBOARD_IMAGE=ghcr.io/bigospeedrun/board@${digest(1)}\n`);
 writeFileSync(join(root, 'release.commit'), commit(1) + '\n');
@@ -38,8 +49,11 @@ case $1 in
 pull) grep -qx "\${3##*@}" "$fake/pull-fail" 2>/dev/null && exit 1; exit 0 ;;
 image) ref=\${@: -1}; cat "$fake/labels/\${ref##*@}" ;;
 run)
-  for a in "$@"; do [[ $a == *@sha256:* ]] && d=\${a##*@}; done
-  if [[ -f $fake/migrations/$d ]]; then cat "$fake/migrations/$d"; else printf '${base5.replace(/\t/g, '\\t').replace(/\n/g, '\\n')}'; fi ;;
+  [[ -e $fake/run-fail ]] && exit 1
+  while [[ $1 != --entrypoint ]]; do shift; done
+  entrypoint=$2 ref=$3; shift 3
+  dir=$fake/images/\${ref##*@}; [[ -d $dir ]] || dir=$fake/images/base
+  cd "$dir" && exec "$entrypoint" "$@" ;;
 compose)
   for ((i=1; i<=$#; i++)); do [[ \${!i} == --env-file ]] && { j=$((i+1)); env_file=\${!j}; }; done
   d=$(sed -n 's/^BOARD_IMAGE=.*@//p' "$env_file"); echo "$d" > "$fake/running"
@@ -119,7 +133,7 @@ test('a running image workflow is waiting; a new main digest with no new migrati
 
 test('a new migration waits for an off-box pull that started after the target was first seen', async () => {
   pulled(new Date(Date.now() - 3_600_000));   // last night's pull is too old
-  writeFileSync(join(fake, 'migrations', digest(3)), base5 + '0006_more.sql\t-- more boards\n');
+  image(3, {...base5, '0006_more.sql': '-- more boards\n'});
   mainDigest = digest(3);
   let {status} = await tick();
   assert.equal(status.result, 'waiting');
@@ -143,7 +157,7 @@ test('a new migration waits for an off-box pull that started after the target wa
 
 test('a migration marked -- manual stops until the operator allows that digest, then still waits for a pull', async () => {
   pulled(new Date(Date.now() - 3_600_000));
-  writeFileSync(join(fake, 'migrations', digest(4)), base5 + '0006_more.sql\t-- more boards\n0007_split.sql\t-- manual: split a table\n');
+  image(4, {'0007_split.sql': '-- manual: split a table\nALTER TABLE x;\n'}, 3);
   mainDigest = digest(4);
   let {status} = await tick();
   assert.equal(status.result, 'manual_deploy_needed');
@@ -171,14 +185,14 @@ test('socket directories that do not match wg-caddy deploy nothing', async () =>
 
 test('the same migrations as the running image need no new pull', async () => {
   for (const n of [5, 6, 7]) {
-    writeFileSync(join(fake, 'migrations', digest(n)), readFileSync(join(fake, 'migrations', digest(4))));
+    image(n, {}, 4);
     mainDigest = digest(n);
     assert.equal((await tick()).status.result, 'deployed');
   }
 });
 
 test('an unhealthy image rolls back by itself and is not tried again', async () => {
-  writeFileSync(join(fake, 'migrations', digest(8)), readFileSync(join(fake, 'migrations', digest(7))));
+  image(8, {}, 7);
   writeFileSync(join(fake, 'unhealthy'), digest(8) + '\n');
   mainDigest = digest(8);
   let {status} = await tick();
@@ -186,6 +200,9 @@ test('an unhealthy image rolls back by itself and is not tried again', async () 
   assert.equal(status.deployed, commit(7));
   assert.equal(running(), digest(7));
   assert.deepEqual(failed(), [digest(8)]);
+  // A rollback with no new migration does not stop the deploys; release.env keeps its lines.
+  assert.equal(status.stopped, false);
+  assert.equal(readFileSync(join(root, 'release.env'), 'utf8'), `BOARD_SOCKET_GID=64543\nBOARD_WRITES=off\nBOARD_IMAGE=ghcr.io/bigospeedrun/board@${digest(7)}\n`);
   ({status} = await tick());
   assert.equal(status.result, 'failed_target');
 });
@@ -213,7 +230,7 @@ test('API errors, hold, lock and bad config deploy nothing', async () => {
 
 test('a failed rollback stops every later tick until the marker is deleted', async () => {
   writeFileSync(join(fake, 'labels', digest(9)), commit(9));
-  writeFileSync(join(fake, 'migrations', digest(9)), readFileSync(join(fake, 'migrations', digest(7))));
+  image(9, {}, 7);
   // A new digest whose image fails, and the previous one no longer runs healthy either.
   mainDigest = digest(9);
   writeFileSync(join(fake, 'unhealthy'), [digest(9), digest(7)].join('\n') + '\n');
@@ -235,4 +252,119 @@ test('BOARD_TAG follows a rehearsal tag, and an unhealthy rehearsal rolls back',
   assert.ok(failed().includes(rehearsalBad));
   writeFileSync(join(envDir, 'board-auto-deploy.env'), envLines + 'BOARD_TAG=bad tag\n', {mode: 0o600});
   assert.equal((await tick()).status.phase, 'config');
+});
+
+const label = (n: number) => writeFileSync(join(fake, 'labels', digest(n)), commit(n));
+const stamp = (when: Date) => when.toISOString().replace(/\.\d+Z$/, 'Z');
+const sleep = (ms: number) => new Promise(done => setTimeout(done, ms));
+const stateFile = (name: string) => join(root, 'auto-deploy', name);
+
+test('-- manual is read strictly: a BOM, blank lines, no space, any case', async () => {
+  writeFileSync(join(envDir, 'board-auto-deploy.env'), envLines, {mode: 0o600});
+  writeFileSync(join(fake, 'unhealthy'), '');
+  assert.equal(running(), digest(7));
+  pulled(new Date(Date.now() - 3_600_000));
+  const cases: [number, string, boolean][] = [
+    [12, '\uFEFF-- manual: with a BOM\nALTER TABLE x;\n', true],
+    [13, '\n   \n-- manual after blank lines\n', true],
+    [14, '--manual\nALTER TABLE x;\n', true],
+    [15, '-- MANUAL\n', true],
+    [16, '\uFEFF\r\n\r\n--Manual\r\nALTER TABLE x;\r\n', true],
+    [17, '-- manually tuned, not a marker\n', false],
+    [18, 'SELECT 1; -- manual\n', false],
+  ];
+  for (const [n, text, manual] of cases) {
+    label(n); image(n, {'0008_case.sql': text}, 7);
+    mainDigest = digest(n);
+    const {status} = await tick();
+    assert.equal(status.result, manual ? 'manual_deploy_needed' : 'waiting', JSON.stringify(text));
+    assert.equal(running(), digest(7));
+  }
+});
+
+test('tick_error_since keeps its start while ticks fail, and a good tick clears it', async () => {
+  label(19); image(19, {}, 7);
+  mainDigest = digest(19);
+  writeFileSync(join(fake, 'run-fail'), '');
+  let {status} = await tick();
+  assert.equal(status.result, 'tick_error');
+  assert.equal(status.phase, 'migrations');
+  const since = status.tick_error_since;
+  assert.match(String(since), /^\d{4}-\d\d-\d\dT/);
+  await sleep(1100);
+  ({status} = await tick());
+  assert.equal(status.result, 'tick_error');
+  assert.equal(status.tick_error_since, since);
+  rmSync(join(fake, 'run-fail'));
+  ({status} = await tick());
+  assert.equal(status.result, 'deployed');
+  assert.equal(status.tick_error_since, null);
+});
+
+test('a pull from before a long hold does not count; an equal or malformed marker waits', async () => {
+  label(20); image(20, {'0008_more.sql': '-- more boards\n'}, 19);
+  mainDigest = digest(20);
+  pulled(new Date(Date.now() - 3_600_000));
+  let {status} = await tick();
+  assert.equal(status.result, 'waiting');
+  // The target was first seen 3 h ago, then a hold; the daily pull 2 h ago came after the
+  // first sight but is more than 30 minutes old.
+  const longAgo = stamp(new Date(Date.now() - 3 * 3_600_000));
+  writeFileSync(stateFile('backup-wanted'), `${digest(20)}\n${longAgo}\n`);
+  writeFileSync(join(envDir, 'board-auto-deploy.hold'), '');
+  pulled(new Date(Date.now() - 2 * 3_600_000));
+  assert.equal((await tick()).status.result, 'held');
+  rmSync(join(envDir, 'board-auto-deploy.hold'));
+  ({status} = await tick());
+  assert.equal(status.result, 'waiting');
+  assert.equal(status.phase, 'backup');
+  assert.equal(status.waiting_since, longAgo);
+  assert.equal(running(), digest(19));
+  // A recent first sight: a marker equal to it, or malformed, still waits.
+  const since = stamp(new Date(Date.now() - 60_000));
+  writeFileSync(stateFile('backup-wanted'), `${digest(20)}\n${since}\n`);
+  for (const text of [JSON.stringify({snapshot_utc: since}), 'not json', JSON.stringify({finished_utc: stamp(new Date())}),
+    JSON.stringify({snapshot_utc: new Date().toISOString()}), JSON.stringify({snapshot_utc: stamp(new Date()).replace('T', ' ')})]) {
+    writeFileSync(marker, text + '\n');
+    ({status} = await tick());
+    assert.equal(status.result, 'waiting', text);
+    assert.equal(running(), digest(19));
+  }
+  writeFileSync(marker, JSON.stringify({snapshot_utc: stamp(new Date(Date.parse(since) + 1000))}) + '\n');
+  ({status} = await tick());
+  assert.equal(status.result, 'deployed');
+  assert.equal(running(), digest(20));
+});
+
+test('the operator override releases only its own digest, once, with no pull', async () => {
+  label(21); image(21, {'0009_x.sql': '-- x\n'}, 20);
+  mainDigest = digest(21);
+  pulled(new Date(Date.now() - 3_600_000));
+  assert.equal((await tick()).status.result, 'waiting');
+  writeFileSync(stateFile('backup-override'), digest(20) + '\n');
+  assert.equal((await tick()).status.result, 'waiting');
+  writeFileSync(stateFile('backup-override'), digest(21) + '\n');
+  const {status, output} = await tick();
+  assert.equal(status.result, 'deployed');
+  assert.equal(status.waiting, false);
+  assert.match(output, /OVERRIDE/);
+  assert.equal(existsSync(stateFile('backup-override')), false);
+  assert.equal(running(), digest(21));
+});
+
+test('a rollback of an image that added a migration stops the deploys; release.env keeps its lines', async () => {
+  label(23); image(23, {'0010_y.sql': '-- y\n'}, 21);
+  mainDigest = digest(23);
+  writeFileSync(join(fake, 'unhealthy'), digest(23) + '\n');
+  pulled(new Date(Date.now() + 2000));
+  let {status} = await tick();
+  assert.equal(status.result, 'rolled_back');
+  assert.equal(status.stopped, true);
+  assert.equal(running(), digest(21));
+  assert.ok(failed().includes(digest(23)));
+  assert.equal(readFileSync(join(root, 'release.env'), 'utf8'), `BOARD_SOCKET_GID=64543\nBOARD_WRITES=off\nBOARD_IMAGE=ghcr.io/bigospeedrun/board@${digest(21)}\n`);
+  ({status} = await tick());
+  assert.equal(status.result, 'stopped');
+  assert.equal(status.phase, 'marker');
+  rmSync(stateFile('stopped'));
 });

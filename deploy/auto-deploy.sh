@@ -13,16 +13,33 @@
 # checks, and rolls back by itself.
 #
 # The board has a database, so the tick adds a migration guard before the swap: when the
-# new image adds a file in db/migrations, it deploys only after an off-box backup pull that
-# started after it first saw the target. The backup host's pulls are the only proof: the
-# dump program writes $pull_marker only when the bosbackup login ran it, after the whole
-# stream went out. Until then the tick ends `waiting` in phase `backup`; on the backup host
+# new image adds a file in db/migrations, it deploys only after an off-box backup pull whose
+# snapshot is later than the time the tick first saw the target AND at most 30 minutes old
+# (so a pull from before a long hold does not count). The backup host's pulls are the only
+# proof: the dump program writes $pull_marker only for the bosbackup login, and only after
+# the backup host has verified and published the copy and sent back its ciphertext SHA-256.
+# Until then the tick ends `waiting` in phase `backup`; on the backup host
 # bos-board-backup-gate sees that in the health read and starts a pull, so the copy from
-# before the migration is a normal verified backup there. A new migration whose first line
-# starts with `-- manual` stops with manual_deploy_needed until an operator writes the
-# target digest into $state/manual-ok (and then it still waits for the pull). Migrations are
-# forward-only and the previous image's migrate step skips the rows it does not know, so a
-# rollback runs on the new schema.
+# before the migration is a normal verified backup there.
+#
+# A new migration whose first non-blank line (after a UTF-8 BOM) matches `--\s*manual\b`,
+# in any case, stops with manual_deploy_needed. The tick never runs it on its own: an
+# operator either deploys it by hand, or writes the target digest into $state/manual-ok,
+# which makes the tick run it unattended (board-migrate on the swap) after the off-box pull.
+#
+# Operator override, for a migration image while the backup host is down: write the exact
+# target digest (sha256:...) into $state/backup-override. The tick then deploys that one
+# digest without waiting for the off-box pull (manual migrations still need manual-ok) and
+# deletes the file when it uses it. The tick never writes this file; nothing else does
+# either. Take a local copy of the database first if you can.
+#
+# Migrations are forward-only and the previous image's migrate step skips the rows it does
+# not know, so a rollback runs on the new schema. But a migration that ran may have changed
+# data, so a rollback of an image that added a migration also writes the stopped marker:
+# nothing deploys again until a person has checked the database and deleted it.
+#
+# tick_error_since is kept while ticks fail (tick_error) and deleted by the first tick that
+# gets past its reads with any other result.
 #
 # Every tick also checks the socket directories (socket-dirs.sh --check): their group must
 # be wg-caddy's gid now, which is dynamic (DynamicUser), and equal BOARD_SOCKET_GID.
@@ -57,7 +74,7 @@ main() {
   socket_check=${BOARD_SOCKET_CHECK:-$here/socket-dirs.sh --check}
   state=$root/auto-deploy
 
-  result=error phase=start target="" deployed="" waiting=false units=unchecked
+  result=error phase=start target="" deployed="" waiting=false units=unchecked migration_added=false
   mkdir -p "$state/attempts"
   trap write_status EXIT
 
@@ -93,8 +110,15 @@ main() {
     tick_error sockets "the socket directories do not match wg-caddy's group (socket-dirs.sh --check)"
     return 0
   fi
-  select_target || return 0
-  guard_migrations || return 0
+  select_target || {
+    clear_tick_error
+    return 0
+  }
+  guard_migrations || {
+    clear_tick_error
+    return 0
+  }
+  clear_tick_error
   deploy_target
 }
 
@@ -176,6 +200,9 @@ tick_error() {
   say "FAIL $2"
 }
 
+# A tick that got past the registry, API and migration reads ends the error streak.
+clear_tick_error() { [[ $result == tick_error ]] || rm -f "$state/tick-error-since"; }
+
 # One conditional request: the newest run of the image workflow on main. A 304 reuses the
 # saved body and does not count against the API rate limit. Prints the run's status.
 image_run_status() {
@@ -224,7 +251,6 @@ select_target() {
     tick_error registry "the registry's $tag tag could not be read"
     return 1
   fi
-  rm -f "$state/tick-error-since"
   if [[ $status != completed && $status != none ]]; then
     waiting=true
     [[ -f $state/waiting-since ]] || date -u +%FT%TZ >"$state/waiting-since"
@@ -263,14 +289,29 @@ select_target() {
   return 0
 }
 
-# "<file>\t<first line>" for each migration in an image, read with no network.
+# "<file>\t<first non-blank line>" for each migration in an image, read with no network:
+# a UTF-8 BOM and blank lines before it are skipped, the line is trimmed.
 migrations_of() {
-  "$docker" run --rm --network none --entrypoint sh "$1" -c \
-    'cd db/migrations && for f in *.sql; do printf "%s\t%s\n" "$f" "$(head -n 1 "$f")"; done'
+  "$docker" run --rm --network none --entrypoint node "$1" -e '
+const fs = require("fs");
+for (const f of fs.readdirSync("db/migrations").filter(n => n.endsWith(".sql")).sort()) {
+  const text = fs.readFileSync("db/migrations/" + f, "utf8").replace(/^\uFEFF/, "");
+  const line = text.split(/\r?\n/).find(l => l.trim() !== "") || "";
+  process.stdout.write(f + "\t" + line.trim().replace(/[\t\r]/g, " ") + "\n");
+}'
+}
+
+# `--\s*manual\b`, in any case, at the start of a migration's first line.
+is_manual() {
+  local re='^--[[:space:]]*manual([^[:alnum:]_]|$)' found=1
+  shopt -s nocasematch
+  [[ $1 =~ $re ]] && found=0
+  shopt -u nocasematch
+  return $found
 }
 
 guard_migrations() {
-  local old new added name first since snap
+  local old new added name first since snap fresh_after
   phase=migrations
   if ! old=$(migrations_of "$image@$(release_digest "$root/release.env")") || ! new=$(migrations_of "$image@$digest"); then
     tick_error migrations "the migration lists could not be read"
@@ -281,24 +322,34 @@ guard_migrations() {
     rm -f "$state/backup-wanted"
     return 0
   fi
-  while IFS= read -r name; do
-    first=$(awk -F'\t' -v n="$name" '$1 == n {print $2; exit}' <<<"$new")
-    if [[ $first == "-- manual"* && $(cat "$state/manual-ok" 2>/dev/null) != "$digest" ]]; then
+  migration_added=true
+  while IFS=$'\t' read -r name first; do
+    grep -qxF -- "$name" <<<"$added" || continue
+    if is_manual "$first" && [[ $(cat "$state/manual-ok" 2>/dev/null) != "$digest" ]]; then
       result=manual_deploy_needed
-      say "$name is marked -- manual: deploy $target by hand, then write $digest to $state/manual-ok"
+      say "$name is marked -- manual: the tick does not run it. Deploy $target by hand, or write $digest to $state/manual-ok to make the tick run it unattended after an off-box backup pull"
       return 1
     fi
-  done <<<"$added"
+  done <<<"$new"
   # The time this target first needed a backup; a pull must start after it.
   [[ $(sed -n 1p "$state/backup-wanted" 2>/dev/null) == "$digest" ]] ||
     printf '%s\n%s\n' "$digest" "$(date -u +%FT%TZ)" >"$state/backup-wanted"
   since=$(sed -n 2p "$state/backup-wanted")
+  if [[ $(cat "$state/backup-override" 2>/dev/null) == "$digest" ]]; then
+    rm -f "$state/backup-override" "$state/backup-wanted" "$state/waiting-since"
+    waiting=false
+    say "$target adds a migration: OVERRIDE by $state/backup-override, deploying with no off-box backup pull"
+    return 0
+  fi
   snap=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["snapshot_utc"])' "$pull_marker" 2>/dev/null) || snap=""
-  # Both are UTC times in the same format, so the text order is the time order.
-  if [[ -z $snap || ! $snap > $since ]]; then
+  [[ $snap =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || snap=""
+  fresh_after=$(date -u -d '30 minutes ago' +%FT%TZ)
+  # All three are UTC times in the same format, so the text order is the time order. The
+  # pull must be later than the first sight and at most 30 minutes old.
+  if [[ -z $snap || ! $snap > $since || $snap < $fresh_after ]]; then
     result=waiting phase=backup waiting=true
     echo "$since" >"$state/waiting-since"
-    say "$target adds a migration: waiting for an off-box backup pull after $since"
+    say "$target adds a migration: waiting for an off-box backup pull after $since and after $fresh_after"
     return 1
   fi
   rm -f "$state/backup-wanted" "$state/waiting-since"
@@ -360,7 +411,11 @@ deploy_target() {
     if up && running=$(running_digest) && [[ $running == "$previous_digest" ]]; then
       result=rolled_back phase=health
       echo "$digest" >>"$state/failed"
+      if $migration_added; then
+        stop "$target added a migration, which may have run before the rollback to $previous_commit; check the database"
+      fi
     else
+      result=rollback_failed phase=check
       stop "the rollback to $previous_commit does not run healthy"
     fi
   fi
@@ -369,7 +424,6 @@ deploy_target() {
 
 # Nothing unattended runs again until an operator deletes the marker.
 stop() {
-  result=rollback_failed phase=check
   date -u +%FT%TZ >"$state/stopped"
   say "STOPPED $1; delete $state/stopped once the board is recovered"
 }

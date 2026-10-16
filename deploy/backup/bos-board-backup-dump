@@ -6,32 +6,41 @@ Database `board` in the board-db container of compose project bigospeedrun-board
 Only the forced command of the `bosbackup` SSH login runs it, through one sudoers rule
 with no arguments. It writes ONE uncompressed tar stream to stdout with two members:
 
-  meta.json  source identity, versions, sizes, hashes, row counts, sequences, migrations
+  meta.json  source identity, versions, sizes, hashes, row counts, sequences, and
+             "migrations": null
   dump.age   pg_dump custom format, encrypted on this host to AGE_RECIPIENT
 
 The plaintext dump never touches the disk and never leaves this host: pg_dump stdout ->
-SHA-256 -> age stdin. Row counts, the migration list and the dump read ONE exported
-snapshot, so they describe the same committed state. This host holds no decryption
-identity and no credential for any backup store.
+SHA-256 -> age stdin. Row counts, sequences and the dump read ONE exported snapshot, so
+they describe the same committed state. This host holds no decryption identity and no
+credential for any backup store.
 
 Differences from Wall Game: board-db trusts no login, not even on its socket, and has no
 `postgres` role. So every psql and pg_dump call runs as the read-only role board_dump
 (migration 0005) with -h /var/run/postgresql, and the password goes in by
-`docker exec -e PGPASSWORD`: this program reads it from PASSWORD_FILE into its own
-environment, so it is never in argv. The source identity queries (server_version,
-pg_control_system) work for board_dump. "migrations" in meta.json is null: the backup
-host's tool compares migration lists only for Drizzle's table, and the restore test reads
-board_meta.migration from the restored copy instead.
+`docker exec -e PGPASSWORD`: this program reads it from PASSWORD_FILE and puts it only in
+the environment of those psql and pg_dump calls (never in argv, never in its own
+environment, so `docker ps`, `docker inspect` and age do not get it). The source identity
+queries (server_version, pg_control_system) work for board_dump. "migrations" in meta.json
+is null: the backup host's tool compares migration lists only for Drizzle's table, and the
+restore test reads board_meta.migration from the restored copy instead.
 
-After the whole stream went out to the bosbackup login (sudo sets SUDO_USER), it writes
-PULL_MARKER with the snapshot time. The board's auto-deploy.sh deploys an image that adds
-a migration only after a pull newer than the time it first saw that image, so the copy
-from before the migration is on the backup host. A run by anyone else writes no marker.
+Pull marker, for the bosbackup login only (sudo sets SUDO_USER; the forced command passes
+the SSH channel's stdin through sudo). After the whole stream went out, the program closes
+its stdout and waits up to ACK_SECONDS (15 min) for ONE line on stdin: the hex
+ciphertext_sha256 of this run. The backup host (vpsbackup.py, conf "ack": true) sends it
+only after it has verified and published the copy. On an exact match the program writes
+PULL_MARKER with the snapshot time and exits 0. On a different line, end of input or the
+timeout it writes no marker, logs why and exits EXIT_NO_ACK (3). The board's
+auto-deploy.sh deploys an image that adds a migration only after a marker newer than the
+time it first saw that image, so the copy from before the migration is verified on the
+backup host. A run by anyone else does not wait and writes no marker.
 """
 import fcntl
 import hashlib
 import json
 import os
+import select
 import shutil
 import signal
 import socket
@@ -60,6 +69,9 @@ WORK_PARENT = "/var/tmp"
 LOCK_FILE = "/run/bos-board-backup.lock"
 LOCK_WAIT_TIMEOUT = "60s"
 MAX_SECONDS = 1800
+ACK_SECONDS = 900  # the backup host verifies (deep, with pg_restore) and publishes in this time
+ACK_MAX_BYTES = 200
+EXIT_NO_ACK = 3
 META_FORMAT = "wallgame-backup-meta/1"  # the format the backup host's vpsbackup.py reads
 END = "__BOSBACKUP_END__"
 CHUNK = 1 << 20
@@ -76,8 +88,8 @@ def die(msg):
     sys.exit(1)
 
 
-def run(args):
-    r = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+def run(args, env=None):
+    r = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     if r.returncode != 0:
         die(f"{args[0]} {args[1]} exit={r.returncode}: {r.stderr.strip()[:300]}")
     return r.stdout
@@ -102,11 +114,14 @@ def find_container():
 
 
 def load_password():
+    """The environment for the psql and pg_dump calls only: `docker exec -e PGPASSWORD`
+    takes the value from it by name, so it is never in argv or in this program's own
+    environment."""
     with open(PASSWORD_FILE) as f:
         password = f.read().strip()
     if len(password) < 24:
         die("the dump password file is empty or short")
-    os.environ["PGPASSWORD"] = password  # for `docker exec -e PGPASSWORD`; never in argv
+    return dict(os.environ, PGPASSWORD=password)
 
 
 def psql_args(cid, *extra):
@@ -114,17 +129,17 @@ def psql_args(cid, *extra):
             "-h", SOCKET_DIR, "-U", DUMP_ROLE, "-d", DATABASE, "--no-password"]
 
 
-def dump_role_query(cid, sql):
-    return run(psql_args(cid) + ["-At", "-c", sql]).strip()
+def dump_role_query(cid, sql, pg_env):
+    return run(psql_args(cid) + ["-At", "-c", sql], env=pg_env).strip()
 
 
 class Session:
     """One psql session as the dump role that holds the exported snapshot open."""
 
-    def __init__(self, cid):
+    def __init__(self, cid, pg_env):
         self.p = subprocess.Popen(
             psql_args(cid, "-i") + ["-q", "-At", "-F", "\t"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=pg_env)
 
     def ask(self, sql):
         self.p.stdin.write(f"{sql}\n\\echo {END}\n")
@@ -158,6 +173,49 @@ def write_marker(obj):
     os.replace(tmp, PULL_MARKER)
 
 
+def read_line(fd, seconds):
+    """One line from fd within `seconds`, without its newline; or (None, why)."""
+    deadline = time.monotonic() + seconds
+    buf = b""
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0 or not select.select([fd], [], [], left)[0]:
+            return None, f"no line within {seconds} s"
+        chunk = os.read(fd, ACK_MAX_BYTES + 1 - len(buf))
+        if not chunk:
+            return None, "end of input before a full line"
+        buf += chunk
+        if b"\n" in buf:
+            return buf.split(b"\n", 1)[0], None
+        if len(buf) > ACK_MAX_BYTES:
+            return None, "line too long"
+
+
+def close_stdout():
+    """End the stream: fd 1 now points at /dev/null. (sudo may hold its own copy of the
+    channel, so the backup host also stops at the end of the tar archive.)"""
+    sys.stdout.flush()
+    null = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(null, 1)
+    os.close(null)
+
+
+def finish_pull(marker, expected, fd=0, seconds=None):
+    """Wait for the backup host's acknowledgement; write the marker only on an exact match."""
+    seconds = ACK_SECONDS if seconds is None else seconds
+    close_stdout()
+    line, why = read_line(fd, seconds)
+    if line is None:
+        log(f"NO ACK {why}: no pull marker")
+        return False
+    if line != expected.encode():
+        log(f"NO ACK the acknowledgement is not this run's ciphertext_sha256 ({len(line)} bytes): no pull marker")
+        return False
+    write_marker(marker)
+    log(f"ack ok: pull marker snapshot_utc={marker['snapshot_utc']}")
+    return True
+
+
 def main():
     if len(sys.argv) != 1:
         die("this program takes no arguments")
@@ -172,7 +230,7 @@ def main():
         die("another backup is running")
     if not AGE_RECIPIENT.startswith("age1"):
         die("AGE_RECIPIENT is not set")
-    load_password()
+    pg_env = load_password()
     started = utc()
     log(f"start product={PRODUCT} project={COMPOSE_PROJECT} service={COMPOSE_SERVICE} db={DATABASE}")
 
@@ -186,13 +244,13 @@ def main():
         "image_ref": info["Config"]["Image"],
         "image_id": info["Image"],
         "database": DATABASE,
-        "pg_server_version": dump_role_query(cid, "SHOW server_version"),
-        "pg_system_identifier": dump_role_query(cid, "SELECT system_identifier FROM pg_control_system()"),
+        "pg_server_version": dump_role_query(cid, "SHOW server_version", pg_env),
+        "pg_system_identifier": dump_role_query(cid, "SELECT system_identifier FROM pg_control_system()", pg_env),
     }
     pg_dump_version = run([DOCKER, "exec", "-u", "postgres", cid, "pg_dump", "--version"]).strip()
     age_version = run([AGE, "--version"]).strip()
 
-    s = Session(cid)
+    s = Session(cid, pg_env)
     s.ask("BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY;")
     snap = s.ask("SELECT pg_export_snapshot();")
     if len(snap) != 1 or len(snap[0]) != 1:
@@ -221,7 +279,7 @@ def main():
             [DOCKER, "exec", "-e", "PGPASSWORD", "-u", "postgres", cid, "pg_dump", "--format=custom", "--no-password",
              f"--snapshot={snapshot}", f"--lock-wait-timeout={LOCK_WAIT_TIMEOUT}",
              "-h", SOCKET_DIR, "-U", DUMP_ROLE, "-d", DATABASE],
-            stdout=subprocess.PIPE)
+            stdout=subprocess.PIPE, env=pg_env)
         age = subprocess.Popen([AGE, "-r", AGE_RECIPIENT, "-o", enc_path], stdin=subprocess.PIPE)
         plain_hash, plain_bytes, head = hashlib.sha256(), 0, b""
         while True:
@@ -284,13 +342,15 @@ def main():
                 with open(os.path.join(work, name), "rb") as f:
                     tar.addfile(ti, f)
         sys.stdout.buffer.flush()
-        if os.environ.get("SUDO_USER") == PULL_USER:
-            write_marker({"snapshot_utc": snapshot_utc, "finished_utc": finished,
-                          "ciphertext_sha256": enc_hash.hexdigest()})
         log(f"ok sent tables={len(row_counts)} rows={sum(row_counts.values())} "
             f"plaintext_bytes={plain_bytes} ciphertext_bytes={enc_bytes} ciphertext_sha256={enc_hash.hexdigest()}")
     finally:
         shutil.rmtree(work, ignore_errors=True)
+    if os.environ.get("SUDO_USER") == PULL_USER:
+        signal.alarm(int(ACK_SECONDS) + 60)  # read_line has its own bound; this is the backstop
+        if not finish_pull({"snapshot_utc": snapshot_utc, "finished_utc": finished,
+                            "ciphertext_sha256": enc_hash.hexdigest()}, enc_hash.hexdigest()):
+            sys.exit(EXIT_NO_ACK)
 
 
 if __name__ == "__main__":

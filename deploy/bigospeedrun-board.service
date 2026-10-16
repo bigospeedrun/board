@@ -2,6 +2,13 @@
 # have restart: unless-stopped; this unit fixes the socket directories, makes the order
 # explicit and waits for health. After= orders it behind the shared Caddy only; it adds
 # nothing to the wg-caddy unit.
+#
+# No ExecStop, on purpose: `compose stop` marks the containers as stopped by hand, and
+# Docker then keeps them down when it starts again. Requires= stops this unit with
+# docker.service, but a later `systemctl start docker` does not start it again, so after a
+# Docker stop/start (an upgrade, by hand) the board would stay down. Without ExecStop
+# Docker stops the containers itself and brings them back by their restart policy. To stop
+# the board, run `compose stop` or `down` by hand (E1 rollback).
 [Unit]
 Description=bigospeedrun board (compose project bigospeedrun-board)
 Requires=docker.service
@@ -16,9 +23,7 @@ WorkingDirectory=/opt/bigospeedrun-board
 # BOARD_SOCKET_GID fails this unit, and the deploy tick reports tick_error.
 ExecStartPre=/opt/bigospeedrun-board/ops/socket-dirs.sh
 ExecStart=/usr/bin/docker compose -p bigospeedrun-board -f /opt/bigospeedrun-board/compose.board.yml --env-file /opt/bigospeedrun-board/release.env up -d --wait --wait-timeout 240 board-db board-api board-auth board-egress
-ExecStop=/usr/bin/docker compose -p bigospeedrun-board -f /opt/bigospeedrun-board/compose.board.yml --env-file /opt/bigospeedrun-board/release.env stop
 TimeoutStartSec=300
-TimeoutStopSec=120
 
 [Install]
 WantedBy=multi-user.target
