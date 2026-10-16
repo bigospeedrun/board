@@ -7,7 +7,9 @@
 #   	import /etc/wg-caddy/board-routes.caddy
 #   }
 #
-# Only the three public endpoints pass; every other path and method on this host is 404.
+# Only the three public endpoints and the read-only pages pass (GET/HEAD /board/,
+# /board/<slug>, /board/assets/*, all from board-api); every other path and method on this
+# host is 404. / sends people to the board list.
 # Caddy reaches the services through unix sockets in /run/bigospeedrun-board/{api,auth}
 # (group wg-caddy). Body caps match the apps: 8 KiB = 8192 bytes, 2 KiB = 2048 bytes.
 handle /board/* {
@@ -30,6 +32,22 @@ handle /board/* {
 		path /board/api/posts
 	}
 	handle @read_api {
+		reverse_proxy unix//run/bigospeedrun-board/api/api.sock
+	}
+
+	@pages {
+		method GET HEAD
+		path /board/ /board/assets/*
+	}
+	handle @pages {
+		reverse_proxy unix//run/bigospeedrun-board/api/api.sock
+	}
+
+	@board_page {
+		method GET HEAD
+		path_regexp ^/board/[a-z0-9][a-z0-9-]{0,62}$
+	}
+	handle @board_page {
 		reverse_proxy unix//run/bigospeedrun-board/api/api.sock
 	}
 
@@ -57,7 +75,12 @@ handle /board/* {
 	}
 }
 
-# Everything outside /board/ on this host.
+# The host's root: the board list.
+handle / {
+	redir * /board/ 302
+}
+
+# Everything else outside /board/ on this host.
 handle {
 	respond 404
 }

@@ -14,6 +14,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
 COPY db ./db
+COPY public ./public
 # Non-root uid from the playbook; the app files stay root-owned and read-only.
 USER 10001:10001
 CMD ["node", "--experimental-strip-types", "src/board-api.ts"]

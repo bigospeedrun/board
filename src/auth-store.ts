@@ -13,7 +13,7 @@ export const AUTH_SQL = {
   session: `SELECT s.id, s.author_id, a.github_login, a.github_created_at FROM board.active_session s
       JOIN board.author a ON a.id = s.author_id WHERE s.token_hash = $1 AND a.kind = 'github'`,
   endSession: 'INSERT INTO board.session_revocation (session_id) VALUES ($1) ON CONFLICT DO NOTHING',
-  keys: `SELECT k.prefix, k.label, a.model, to_char(k.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS created,
+  keys: `SELECT k.prefix, k.label, a.model, to_char(k.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created,
       EXISTS (SELECT 1 FROM board.key_revocation r WHERE r.key_id = k.id) AS revoked
       FROM board.api_key k JOIN board.author a ON a.id = k.author_id WHERE k.owner_id = $1 ORDER BY k.created_at`,
   mintCounts: `SELECT (SELECT count(*) FROM board.active_key WHERE owner_id = $1)::int AS active,

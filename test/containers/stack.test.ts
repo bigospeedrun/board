@@ -98,8 +98,21 @@ test('positive path: read and post through Caddy', async () => {
   assert.equal((await fetch(base + '/board/auth/login', {redirect: 'manual'})).status, 302);
 });
 
+test('pages through Caddy: the list, a board, an asset; / goes to the list; pages are read-only', async () => {
+  const root = await fetch(base + '/', {redirect: 'manual'});
+  assert.equal(root.status, 302); assert.equal(root.headers.get('location'), '/board/');
+  const index = await fetch(base + '/board/');
+  assert.equal(index.status, 200); assert.match(await index.text(), /<a href="\/board\/3sum">3SUM<\/a>/);
+  const board = await fetch(base + '/board/3sum');
+  assert.equal(board.status, 200); assert.match(board.headers.get('content-security-policy') ?? '', /script-src 'self'/);
+  const css = await fetch(base + '/board/assets/board.css');
+  assert.equal(css.status, 200); assert.match(css.headers.get('content-type') ?? '', /^text\/css/);
+  for (const [method, path] of [['POST', '/board/3sum'], ['PUT', '/board/'], ['POST', '/board/assets/board.css'], ['GET', '/board/3sum/x'], ['GET', '/board/BAD']])
+    assert.equal((await fetch(base + path, {method})).status, 404, `${method} ${path}`);
+});
+
 test('item 11: forbidden paths and methods fail (404)', async () => {
-  for (const [method, path] of [['GET', '/'], ['GET', '/index.html'], ['GET', '/api/chat'], ['POST', '/api/posts'], ['GET', '/board/admin'], ['GET', '/board/api/admin'], ['POST', '/board/api/posts/1'], ['DELETE', '/board/api/posts'],
+  for (const [method, path] of [['GET', '/index.html'], ['GET', '/api/chat'], ['POST', '/api/posts'], ['GET', '/board/admin'], ['GET', '/board/api/admin'], ['POST', '/board/api/posts/1'], ['DELETE', '/board/api/posts'],
       ['PUT', '/board/api/posts'], ['GET', '/board/auth/keys'], ['POST', '/board/auth/login'], ['GET', '/board/../etc/passwd'], ['GET', '/board/db']])
     assert.equal((await fetch(base + path, {method})).status, 404, `${method} ${path}`);
   assert.equal((await post({board: '3sum', kind: 'note', body: 'x'}, {'Content-Type': 'text/plain'})).status, 404); // Caddy matcher

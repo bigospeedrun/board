@@ -1,10 +1,12 @@
-// board-api request handler. Two public routes only:
+// board-api request handler. Two API routes:
 //   POST /board/api/posts   (agent key or signed-in session; JSON <= 8 KiB)
 //   GET  /board/api/posts?board=[&before=|&after=][&limit=][&format=md]
-// Everything else is 404. The handler talks to a Store, so unit tests use a fake one.
+// and the read-only pages (src/pages.ts): GET /board/, GET /board/<slug> and the static
+// files under /board/assets/. Everything else is 404. The handler talks to a Store, so unit tests use a fake one.
 import type {IncomingMessage, ServerResponse} from 'node:http';
 import {LIMITS, type Config, type PostInput, validatePost, contentProblem, bodyHash, parseKey,
         secretMatches, cookieValue, SESSION_COOKIE, sha256, parseCursor, LINE_BREAK, HUMAN_MODEL} from './rules.ts';
+import {ASSETS, PAGE_HEADERS, boardPage, indexPage, notFoundPage, type BoardInfo} from './pages.ts';
 
 export type Cursor = {at: string; id: string};
 export interface Actor {authorId: string; keyId: string | null; accountId: string; label: string}
@@ -23,6 +25,7 @@ export interface Store {
   sessionByHash(tokenHash: Buffer): Promise<{authorId: string; githubCreatedAt: Date | null} | null>;
   createPost(actor: Actor, input: PostInput, hash: Buffer): Promise<CreateResult>;
   listPosts(board: string, page: {after?: Cursor; before?: Cursor}, limit: number): Promise<PostRow[] | null>;
+  boards(): Promise<BoardInfo[]>;
   audit(rows: {actor: string | null; action: string; rule: string | null; target: string | null; count: number}[]): Promise<void>;
 }
 
@@ -196,6 +199,36 @@ export function createApi(store: Store, config: Config, refusals = new RefusalLo
     send(res, 200, {board, posts, next: posts.length === limit ? posts.at(-1)!.cursor : null}, undefined, {Vary: 'Accept'});
   }
 
+  // The board list changes only with a migration, so the pages read it once a minute.
+  let boards: {at: number; list: BoardInfo[]} | null = null;
+  async function boardList() {
+    if (!boards || Date.now() - boards.at > 60_000) boards = {at: Date.now(), list: await store.boards()};
+    return boards.list;
+  }
+  async function signedIn(req: IncomingMessage) {
+    const token = cookieValue(req.headers.cookie, SESSION_COOKIE);
+    return token ? (await store.sessionByHash(sha256(token))) !== null : false;
+  }
+  const html = (res: ServerResponse, status: number, body: string, head: boolean) => {
+    if (res.headersSent) return;
+    res.writeHead(status, {...PAGE_HEADERS, 'Content-Length': String(Buffer.byteLength(body))});
+    res.end(head ? undefined : body);
+  };
+  async function page(url: URL, req: IncomingMessage, res: ServerResponse) {
+    const head = req.method === 'HEAD';
+    if (url.pathname.startsWith('/board/assets/')) {
+      const file = ASSETS.get(url.pathname.slice('/board/assets/'.length));
+      if (!file) return refuse(res, 404, 'path', 'Not found.');
+      res.writeHead(200, {'Content-Type': file.type, 'Content-Length': String(file.body.length), 'Cache-Control': 'public, max-age=3600',
+        'X-Content-Type-Options': 'nosniff'});
+      return res.end(head ? undefined : file.body);
+    }
+    const list = await boardList(), me = await signedIn(req);
+    if (url.pathname === '/board/') return html(res, 200, indexPage(list, me), head);
+    const board = list.find(b => '/board/' + b.slug === url.pathname);
+    return board ? html(res, 200, boardPage(board, me), head) : html(res, 404, notFoundPage(me), head);
+  }
+
   return async function handle(req: IncomingMessage, res: ServerResponse) {
     // One deadline per request: a slow body, DB or client cannot hold the process.
     const timer = setTimeout(() => { refuse(res, 503, 'timeout', 'Request took too long.'); req.destroy(); }, requestMs);
@@ -203,6 +236,8 @@ export function createApi(store: Store, config: Config, refusals = new RefusalLo
       const url = new URL(req.url ?? '/', 'http://board.invalid');
       if (url.pathname === '/board/api/posts' && req.method === 'POST') await post(req, res);
       else if (url.pathname === '/board/api/posts' && (req.method === 'GET' || req.method === 'HEAD')) await list(url, req, res);
+      else if ((req.method === 'GET' || req.method === 'HEAD') && /^\/board\/(assets\/[A-Za-z0-9_./-]{1,80}|[a-z0-9][a-z0-9-]{0,62})?$/.test(url.pathname)
+               && !url.pathname.includes('..')) await page(url, req, res);
       else refuse(res, 404, 'path', 'Not found.');
     } catch {
       refuse(res, 500, 'internal', 'Internal error.');
