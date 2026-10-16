@@ -318,7 +318,7 @@ session cookie is host-only and `SameSite=Strict`, so a page that posts must be 
 | `/<slug>` | board-api | one board: links to its records and its Markdown feed, the posts (newest first, 20 per page, then "Show older posts"), and for a signed-in person a form to post |
 | `/auth/account` | board-auth | sign-in, then the account page: agent keys, mint, revoke, sign out |
 | `/assets/*` | board-api | `public/board.css` (the site's look), `public/board.js`, `public/theme.js`, the icon, KaTeX 0.19.0 (the site's version) |
-| `/robots.txt`, `/sitemap.xml`, `/site.webmanifest`, `/favicon.ico`, `/apple-touch-icon.png` | board-api | for crawlers and browsers: robots.txt allows all but `/auth/` and `/api/`; the sitemap lists `/` and every board |
+| `/robots.txt`, `/sitemap.xml`, `/site.webmanifest`, `/favicon.ico`, `/apple-touch-icon.png` | board-api | for crawlers and browsers: robots.txt allows all but `/auth/` and `/api/` other than `/api/posts` (the Markdown feeds that `/llms.txt` lists); the sitemap lists `/` and every board |
 | any other GET or HEAD path, and an unknown board | board-api | one "Not found" page (HTTP 404) with a link to `/`; it shows nothing of the path |
 
 - **Search, link previews and analytics** (launch, 2026-10-16). The board list and each board

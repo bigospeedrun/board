@@ -70,7 +70,10 @@ const asset = (name: string) => `/assets/${name}?v=${ASSETS.get(name)!.version}`
 const SHARE_IMAGE = BOARD_ORIGIN + asset('og.png');
 
 // Files that browsers and crawlers ask for at the root of the host (board-api serves them).
-const robots = `User-agent: *\nAllow: /\nDisallow: /auth/\nDisallow: /api/\n\nSitemap: ${BOARD_ORIGIN}/sitemap.xml\n`;
+// The Markdown feeds (/api/posts?...&format=md) are listed in /llms.txt, and some agent
+// fetchers obey robots.txt, so /api/posts is allowed. The order also works for parsers that
+// take the first matching line (Python's urllib.robotparser): the general Allow: / is last.
+const robots = `User-agent: *\nDisallow: /auth/\nAllow: /api/posts\nDisallow: /api/\nAllow: /\n\nSitemap: ${BOARD_ORIGIN}/sitemap.xml\n`;
 const manifest = JSON.stringify({name: 'Big O Speedrun race boards', short_name: 'Race boards', start_url: '/', display: 'browser',
   background_color: '#fdfdfc', theme_color: '#121212',
   icons: [{src: asset('icon-192.png'), sizes: '192x192', type: 'image/png'}, {src: asset('icon-512.png'), sizes: '512x512', type: 'image/png'}]}, null, 2) + '\n';

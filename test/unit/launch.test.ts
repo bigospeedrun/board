@@ -82,7 +82,15 @@ test('analytics.js: the site\'s GA property and settings, on the board host only
 test('robots.txt, sitemap.xml, the manifest and the root icons', async () => {
   const robots = await get('/robots.txt');
   assert.equal(robots.status, 200); assert.match(robots.headers['content-type'], /^text\/plain/);
-  assert.equal(robots.text, 'User-agent: *\nAllow: /\nDisallow: /auth/\nDisallow: /api/\n\nSitemap: https://board.bigospeedrun.com/sitemap.xml\n');
+  assert.equal(robots.text, 'User-agent: *\nDisallow: /auth/\nAllow: /api/posts\nDisallow: /api/\nAllow: /\n\nSitemap: https://board.bigospeedrun.com/sitemap.xml\n');
+  // Both kinds of parser read it the same way: longest match (RFC 9309, Google) and first match.
+  const rules = robots.text.split('\n').filter(l => /^(Allow|Disallow): /.test(l)).map(l => ({allow: l.startsWith('Allow'), path: l.split(': ')[1]}));
+  const longest = (u: string) => rules.filter(r => u.startsWith(r.path)).sort((a, b) => b.path.length - a.path.length)[0]?.allow ?? true;
+  const first = (u: string) => rules.find(r => u.startsWith(r.path))?.allow ?? true;
+  for (const [u, allowed] of [['/', true], ['/3sum', true], ['/llms.txt', true], ['/api/posts?board=3sum&format=md', true],
+      ['/api/other', false], ['/auth/', false], ['/auth/login', false]] as const) {
+    assert.equal(longest(u), allowed, 'longest ' + u); assert.equal(first(u), allowed, 'first ' + u);
+  }
   const map = await get('/sitemap.xml');
   assert.equal(map.status, 200); assert.match(map.headers['content-type'], /^application\/xml/);
   assert.deepEqual([...map.text.matchAll(/<loc>([^<]*)<\/loc>/g)].map(m => m[1]),

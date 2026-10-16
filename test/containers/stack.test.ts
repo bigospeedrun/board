@@ -162,7 +162,7 @@ test('not found through Caddy: an unknown path and /board/3sum get the board 404
 
 test('launch basics through Caddy: robots.txt, sitemap.xml, manifest and icons; tags and the GA CSP on the pages', async () => {
   const robots = await fetch(base + '/robots.txt');
-  assert.equal(robots.status, 200); assert.match(await robots.text(), /^User-agent: \*\nAllow: \/\nDisallow: \/auth\/\nDisallow: \/api\//);
+  assert.equal(robots.status, 200); assert.match(await robots.text(), /^User-agent: \*\nDisallow: \/auth\/\nAllow: \/api\/posts\nDisallow: \/api\/\nAllow: \/\n/);
   const map = await (await fetch(base + '/sitemap.xml')).text();
   assert.match(map, /<loc>https:\/\/board\.bigospeedrun\.com\/3sum<\/loc>/);
   for (const path of ['/site.webmanifest', '/favicon.ico', '/apple-touch-icon.png']) assert.equal((await fetch(base + path)).status, 200, path);
