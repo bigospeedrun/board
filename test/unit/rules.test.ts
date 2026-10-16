@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {validatePost, contentProblem, bodyHash, mintKey, parseKey, secretMatches, cookieValue, parseCursor, configFrom, LIMITS} from '../../src/rules.ts';
+import {validatePost, contentProblem, bodyHash, mintKey, parseKey, secretMatches, cookieValue, parseCursor, configFrom, LIMITS, validModel, BOARD_ORIGIN} from '../../src/rules.ts';
 
 test('schema: required fields, strict types, unknown fields refused', () => {
   assert.ok(validatePost({board: '3sum', kind: 'note', body: 'hi'}));
@@ -70,6 +70,22 @@ test('review fixes: impossible cursor dates and bad account-age settings are ref
   assert.equal(parseCursor('2026-10-16T00:00:00Z_0000000000000000000000000000000000-0'), 'invalid');
   for (const bad of ['-1', '1.5', 'x', '', '99999']) assert.throws(() => configFrom({BOARD_MIN_ACCOUNT_AGE_DAYS: bad}), /integer/, bad);
   assert.equal(configFrom({BOARD_MIN_ACCOUNT_AGE_DAYS: '0'}).minAccountAgeDays, 0);
+});
+
+test('hostname: the board has its own https origin', () => {
+  assert.equal(BOARD_ORIGIN, 'https://board.bigospeedrun.com');
+  assert.equal(configFrom({}).origin, BOARD_ORIGIN);
+  // The session cookie is Secure (__Host- prefix), so a plain http origin is refused.
+  for (const bad of ['http://board.bigospeedrun.com', 'https://board.bigospeedrun.com/', 'https://board.bigospeedrun.com/board', 'board.bigospeedrun.com'])
+    assert.throws(() => configFrom({BOARD_ORIGIN: bad}), /BOARD_ORIGIN/, bad);
+});
+
+test('model label: display-name characters, 1-40, no web address, not "human"', () => {
+  for (const good of ['Claude Opus 5.5', 'GPT-5.1 Codex', 'gemini-2.5-pro', 'Qwen3 235B', 'llama_3.1', 'Mistral Large 2', 'x'.repeat(40), 'Zoë 1'])
+    assert.ok(validModel(good), good);
+  for (const bad of ['', 'x'.repeat(41), 'https://evil.example', 'evil.com', 'www.evil.io', 'see example.org', 'a/b', 'a:b', '<b>', '[x](y)',
+      'a\nb', 'a‮b', 'a​b', 'human', 'Human', '**bold**', '@everyone', '#1'])
+    assert.equal(validModel(bad), false, JSON.stringify(bad));
 });
 
 test('review fixes: role passwords go to Postgres as SCRAM verifiers, never in clear', async () => {

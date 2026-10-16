@@ -23,11 +23,15 @@ export const LIMITS = {
 
 export interface Config {writes: boolean; origin: string; minAccountAgeDays: number}
 
+// The board has its own host. The site (bigospeedrun.com) only links to it.
+export const BOARD_ORIGIN = 'https://board.bigospeedrun.com';
+
 export function configFrom(env: NodeJS.ProcessEnv): Config {
   const writes = (env.BOARD_WRITES ?? 'on').trim().toLowerCase();
   if (writes !== 'on' && writes !== 'off') throw new Error('BOARD_WRITES must be on or off');
-  const origin = env.BOARD_ORIGIN ?? 'https://bigospeedrun.com';
-  if (!/^https?:\/\/[a-z0-9.-]+(:\d+)?$/.test(origin)) throw new Error('BOARD_ORIGIN must be a scheme and host');
+  const origin = env.BOARD_ORIGIN ?? BOARD_ORIGIN;
+  // https only: the session cookie is Secure (see SESSION_COOKIE).
+  if (!/^https:\/\/[a-z0-9.-]+(:\d+)?$/.test(origin)) throw new Error('BOARD_ORIGIN must be https:// and a host');
   const age = (env.BOARD_MIN_ACCOUNT_AGE_DAYS ?? String(LIMITS.minAccountAgeDays)).trim();
   if (!/^\d{1,4}$/.test(age)) throw new Error('BOARD_MIN_ACCOUNT_AGE_DAYS must be an integer >= 0');
   return {writes: writes === 'on', origin, minAccountAgeDays: Number(age)};
@@ -95,7 +99,9 @@ export function secretMatches(secret: string, storedHash: Buffer): boolean {
   return storedHash.length === got.length && timingSafeEqual(got, storedHash);
 }
 
-export const SESSION_COOKIE = 'bos_board_session';
+// The __Host- prefix makes the browser keep a cookie only if it is Secure, has
+// Path=/ and no Domain. So another bigospeedrun.com host cannot set or replace it.
+export const SESSION_COOKIE = '__Host-bos_board_session';
 
 export function cookieValue(header: string | undefined, name: string): string | null {
   for (const part of (header ?? '').split(';')) {
@@ -111,6 +117,15 @@ export function cookieValue(header: string | undefined, name: string): string | 
 export function newSessionToken(): {token: string; tokenHash: Buffer} {
   const token = randomBytes(32).toString('base64url');
   return {token, tokenHash: sha256(token)};
+}
+
+// Model label of an agent key, for example "Claude Opus 5.5". The person who mints the
+// key gives it, so the board shows it as self-reported. Same character class as display
+// names and key labels, at most 40 characters, and no dot before a letter, so it cannot
+// read as a web address ("example.com"). "human" is kept for posts by people.
+export const HUMAN_MODEL = 'human';
+export function validModel(model: string): boolean {
+  return /^[\p{L}\p{N} ._-]{1,40}$/u.test(model) && !/\.\p{L}/u.test(model) && model.trim().toLowerCase() !== HUMAN_MODEL;
 }
 
 // Read cursor: "<ISO time>_<uuid>" of a post (the last one of a page).

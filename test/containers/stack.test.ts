@@ -19,7 +19,7 @@ const CADDY = 'caddy:2.11@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa
 const project = 'bosboardtest' + randomBytes(3).toString('hex');
 const work = mkdtempSync(join(tmpdir(), 'bos-board-stack-'));
 const secrets = join(work, 'secrets'), apiSockets = join(work, 'run-api'), authSockets = join(work, 'run-auth');
-const env = {...process.env, BOARD_IMAGE: IMAGE, BOARD_SECRETS_DIR: secrets, BOARD_API_SOCKET_DIR: apiSockets, BOARD_AUTH_SOCKET_DIR: authSockets, BOARD_GITHUB_CLIENT_ID: 'Iv1.testclient00', BOARD_WRITES: 'on', BOARD_SOCKET_GID: '10001'};
+const env = {...process.env, BOARD_IMAGE: IMAGE, BOARD_SECRETS_DIR: secrets, BOARD_API_SOCKET_DIR: apiSockets, BOARD_AUTH_SOCKET_DIR: authSockets, BOARD_WRITES: 'on', BOARD_SOCKET_GID: '10001'};
 const files = ['-f', join(BOARD, 'deploy/compose.board.yml'), '-f', join(work, 'test.override.yml')];
 const compose = (args: string[], extraEnv: Record<string, string> = {}) => {
   const r = spawnSync('docker', ['compose', '-p', project, ...files, ...args], {env: {...env, ...extraEnv}, encoding: 'utf8'});
@@ -40,7 +40,8 @@ before(async () => {
       github_client_secret: randomBytes(20).toString('hex'), state_secret: randomBytes(32).toString('base64url')})) {
     writeFileSync(join(secrets, name), value + '\n'); chmodSync(join(secrets, name), 0o444); // test only; production 0440 + group
   }
-  writeFileSync(join(work, 'Caddyfile'), `{\n\tadmin off\n\tauto_https off\n\tstorage file_system /tmp/caddy\n}\n:8080 {\n\timport /etc/caddy/board.caddy\n\trespond 404\n}\n`);
+  // Same shape as production (board.bigospeedrun.com { import board.caddy }), on plain :8080.
+  writeFileSync(join(work, 'Caddyfile'), `{\n\tadmin off\n\tauto_https off\n\tstorage file_system /tmp/caddy\n}\n:8080 {\n\timport /etc/caddy/board.caddy\n}\n`);
   // Test-only front: Caddy with the production board.caddy, published on a random local port.
   writeFileSync(join(work, 'test.override.yml'), `services:
   board-caddy:
@@ -69,7 +70,7 @@ before(async () => {
     const c = new pg.Client({password: readFileSync('/run/secrets/owner_password','utf8').trim()}); await c.connect();
     const p = (await c.query("INSERT INTO board.author (kind, github_id, github_login, github_created_at, display_name) VALUES ('github', 1, 'tester', now() - interval '1 year', 'tester') RETURNING id")).rows[0].id;
     const k = mintKey();
-    const a = (await c.query("INSERT INTO board.author (kind, display_name, owner_id) VALUES ('agent_key', 'test bot', $1) RETURNING id", [p])).rows[0].id;
+    const a = (await c.query("INSERT INTO board.author (kind, display_name, owner_id, model) VALUES ('agent_key', 'test bot', $1, 'Test Model 1.5') RETURNING id", [p])).rows[0].id;
     await c.query("INSERT INTO board.api_key (author_id, owner_id, prefix, secret_hash, label) VALUES ($1, $2, $3, $4, 'test')", [a, p, k.prefix, k.secretHash]);
     console.log(k.key); await c.end();`;
   key = compose(['run', '--rm', '-T', '--no-deps', '--entrypoint', 'node', '-e', 'PGUSER=board_owner', '-e', 'PGHOST=/var/run/postgresql', '-e', 'PGDATABASE=board',
@@ -90,12 +91,15 @@ test('positive path: read and post through Caddy', async () => {
   assert.equal((await fetch(base + '/board/api/posts?board=3sum')).status, 200);
   const r = await post({board: '3sum', kind: 'note', body: 'stack test post'});
   assert.equal(r.status, 201);
-  assert.match(await (await fetch(base + '/board/api/posts?board=3sum&format=md')).text(), /> stack test post/);
+  const md = await (await fetch(base + '/board/api/posts?board=3sum&format=md')).text();
+  assert.match(md, /> stack test post/); assert.match(md, /test bot \(agent of @tester\) · model "Test Model 1\\\.5" \(self-reported\)/);
+  const feed = await (await fetch(base + '/board/api/posts?board=3sum')).json();
+  assert.deepEqual(feed.posts[0].author.model, {label: 'Test Model 1.5', selfReported: true});
   assert.equal((await fetch(base + '/board/auth/login', {redirect: 'manual'})).status, 302);
 });
 
 test('item 11: forbidden paths and methods fail (404)', async () => {
-  for (const [method, path] of [['GET', '/board/admin'], ['GET', '/board/api/admin'], ['POST', '/board/api/posts/1'], ['DELETE', '/board/api/posts'],
+  for (const [method, path] of [['GET', '/'], ['GET', '/index.html'], ['GET', '/api/chat'], ['POST', '/api/posts'], ['GET', '/board/admin'], ['GET', '/board/api/admin'], ['POST', '/board/api/posts/1'], ['DELETE', '/board/api/posts'],
       ['PUT', '/board/api/posts'], ['GET', '/board/auth/keys'], ['POST', '/board/auth/login'], ['GET', '/board/../etc/passwd'], ['GET', '/board/db']])
     assert.equal((await fetch(base + path, {method})).status, 404, `${method} ${path}`);
   assert.equal((await post({board: '3sum', kind: 'note', body: 'x'}, {'Content-Type': 'text/plain'})).status, 404); // Caddy matcher

@@ -3,8 +3,8 @@
 #
 #   board-db       Postgres, no network, unix socket only, own volume
 #   board-migrate  one-off: migrations + role passwords (owner role), no network
-#   board-api      POST/GET /board/api/posts, NO network: unix sockets only
-#   board-auth     /board/auth/*, network only to board-egress
+#   board-api      POST/GET https://board.bigospeedrun.com/board/api/posts, NO network: unix sockets only
+#   board-auth     https://board.bigospeedrun.com/board/auth/*, network only to board-egress
 #   board-egress   allowlist proxy (vendored from the site, cb1123e): CONNECT github.com:443, api.github.com:443
 #   board-admin    one-off maintainer CLI (ban, revoke, hide, stats), no network
 #
@@ -36,7 +36,7 @@ x-board: &board
     NODE_ENV: production
     PGHOST: /var/run/postgresql
     PGDATABASE: board
-    BOARD_ORIGIN: https://bigospeedrun.com
+    BOARD_ORIGIN: https://board.bigospeedrun.com   # the board's own host (deploy/board.caddy)
     BOARD_WRITES: ${BOARD_WRITES:-on}   # the kill switch: off makes every write 503
   depends_on:
     board-db: {condition: service_healthy}
@@ -130,7 +130,8 @@ services:
       PGUSER: board_auth
       PGPASSWORD_FILE: /run/secrets/auth_password
       BOARD_SOCKET: /run/board-auth/auth.sock
-      GITHUB_CLIENT_ID: ${BOARD_GITHUB_CLIENT_ID:?set BOARD_GITHUB_CLIENT_ID}
+      # Public id of the GitHub OAuth app (callback https://board.bigospeedrun.com/board/auth/callback).
+      GITHUB_CLIENT_ID: Ov23ctm5ehCmmmzfQpL6
       GITHUB_CLIENT_SECRET_FILE: /run/secrets/github_client_secret
       BOARD_STATE_SECRET_FILE: /run/secrets/state_secret
       NODE_USE_ENV_PROXY: '1'

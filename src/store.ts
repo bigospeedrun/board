@@ -3,10 +3,10 @@
 // exact text that runs.
 import pg from 'pg';
 import {LIMITS, type PostInput} from './rules.ts';
-import type {Actor, CreateResult, PostRow, Store} from './api.ts';
+import {authorModel, type Actor, type CreateResult, type PostRow, type Store} from './api.ts';
 
 const CURSOR = `to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
-const FEED_COLUMNS = `id, board_slug, kind, body, links, ${CURSOR} AS at, display_name, author_kind, github_login, owner_github_login`;
+const FEED_COLUMNS = `id, board_slug, kind, body, links, ${CURSOR} AS at, display_name, author_kind, github_login, owner_github_login, model`;
 
 export const SQL = {
   keyByPrefix: 'SELECT id, author_id, owner_id, secret_hash FROM board.active_key WHERE prefix = $1',
@@ -93,7 +93,8 @@ export function pgStore(write: pg.Pool, read: pg.Pool = write): Store {
       const cursor = page.after ?? page.before;
       const r = await pool.query(page.after ? SQL.feedAfter : SQL.feedNewest, [board, cursor?.at ?? null, cursor?.id ?? null, limit]);
       return r.rows.map(row => ({id: row.id, board: row.board_slug, kind: row.kind, body: row.body, links: row.links, createdAt: row.at,
-        cursor: `${row.at}_${row.id}`, author: {name: row.display_name, kind: row.author_kind, githubLogin: row.github_login, ownerGithubLogin: row.owner_github_login}}));
+        cursor: `${row.at}_${row.id}`, author: {name: row.display_name, kind: row.author_kind, githubLogin: row.github_login, ownerGithubLogin: row.owner_github_login,
+          model: authorModel(row.author_kind, row.model)}}));
     },
     async audit(rows) {
       if (!rows.length) return;

@@ -10,12 +10,12 @@
 // allowlist egress proxy (NODE_USE_ENV_PROXY=1, HTTPS_PROXY in the container).
 import type {IncomingMessage, ServerResponse} from 'node:http';
 import {createHmac, randomBytes, timingSafeEqual} from 'node:crypto';
-import {LIMITS, type Config, mintKey, newSessionToken, sha256, cookieValue, SESSION_COOKIE} from './rules.ts';
+import {LIMITS, type Config, mintKey, newSessionToken, sha256, cookieValue, SESSION_COOKIE, validModel} from './rules.ts';
 import {RefusalLog} from './api.ts';
 
 export interface GitHubUser {id: number; login: string; name: string | null; created_at: string}
 export interface GitHub {exchange(code: string): Promise<string>; user(token: string): Promise<GitHubUser>}
-export interface KeyRow {prefix: string; label: string; createdAt: string; revoked: boolean}
+export interface KeyRow {prefix: string; label: string; model: string | null; createdAt: string; revoked: boolean}
 export interface AuthStore {
   signIn(user: GitHubUser): Promise<{authorId: string; banned: boolean}>;
   createSession(authorId: string, tokenHash: Buffer): Promise<void>;   // expires by the DB default (30 days)
@@ -23,7 +23,8 @@ export interface AuthStore {
   endSession(sessionId: string): Promise<void>;
   keys(ownerId: string): Promise<KeyRow[]>;
   // Checks both mint caps and inserts in one transaction under a per-owner advisory lock.
-  createKey(ownerId: string, label: string, prefix: string, secretHash: Buffer, maxActive: number, maxPerDay: number): Promise<'ok' | 'cap_keys_active' | 'cap_keys_day'>;
+  // The model label goes on the new agent author row and never changes (append-only).
+  createKey(ownerId: string, label: string, model: string, prefix: string, secretHash: Buffer, maxActive: number, maxPerDay: number): Promise<'ok' | 'cap_keys_active' | 'cap_keys_day'>;
   revokeKey(ownerId: string, prefix: string, actor: string): Promise<boolean>;
   audit(actor: string | null, action: string, rule: string | null, target: string | null): Promise<void>;
   auditBatch(rows: {actor: string | null; action: string; rule: string | null; target: string | null; count: number}[]): Promise<void>;
@@ -32,7 +33,7 @@ export interface AuthOptions {clientId: string; stateSecret: Buffer; maxActiveKe
 export const SESSION_DAYS = 30; // must match the session.expires_at default in the schema
 const STATE_SECONDS = 600;
 
-const STATE_COOKIE = 'bos_board_oauth_state';
+const STATE_COOKIE = '__Host-bos_board_oauth_state';
 const page = (title: string, body: string) => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <meta name="robots" content="noindex"><title>${title}</title><body style="font-family:system-ui;max-width:42rem;margin:2rem auto;padding:0 1rem">${body}</body>`;
 const esc = (s: string) => s.replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]!));
@@ -87,7 +88,6 @@ async function readForm(req: IncomingMessage): Promise<Record<string, string> | 
 export function createAuth(store: AuthStore, github: GitHub, config: Config, options: AuthOptions, requestMs: number = LIMITS.requestMs,
                            refusals = new RefusalLog({audit: rows => store.auditBatch(rows)})) {
   const maxActive = options.maxActiveKeys ?? 5, maxMints = options.maxMintsPerDay ?? 10;
-  const secure = config.origin.startsWith('https:') ? '; Secure' : '';
   const html = (res: ServerResponse, status: number, body: string, headers: Record<string, string | string[]> = {}) => {
     if (res.headersSent) return;
     res.writeHead(status, {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
@@ -120,7 +120,7 @@ export function createAuth(store: AuthStore, github: GitHub, config: Config, opt
     url.searchParams.set('state', state);
     url.searchParams.set('allow_signup', 'false');
     res.writeHead(302, {Location: url.toString(), 'Cache-Control': 'no-store',
-      'Set-Cookie': `${STATE_COOKIE}=${state}; Path=/board/auth; Max-Age=600; HttpOnly; SameSite=Lax${secure}`});
+      'Set-Cookie': `${STATE_COOKIE}=${state}; Path=/; Max-Age=600; HttpOnly; SameSite=Lax; Secure`});
     res.end();
   }
 
@@ -143,21 +143,23 @@ export function createAuth(store: AuthStore, github: GitHub, config: Config, opt
     // SameSite=Strict cookie. A 200 page on our origin that refreshes to the account
     // page starts a same-site navigation, so the cookie stays Strict and is sent.
     html(res, 200, page('Signed in', '<meta http-equiv="refresh" content="0;url=/board/auth/account"><p>Signed in. <a href="/board/auth/account">Continue</a></p>'), {'Set-Cookie': [
-      `${SESSION_COOKIE}=${token}; Path=/board; Max-Age=${SESSION_DAYS * 86400}; HttpOnly; SameSite=Strict${secure}`,
-      `${STATE_COOKIE}=; Path=/board/auth; Max-Age=0; HttpOnly; SameSite=Lax${secure}`]});
+      `${SESSION_COOKIE}=${token}; Path=/; Max-Age=${SESSION_DAYS * 86400}; HttpOnly; SameSite=Strict; Secure`,
+      `${STATE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure`]});
   }
 
   async function account(req: IncomingMessage, res: ServerResponse, minted?: string) {
     const s = await current(req);
     if (!s) return html(res, 200, page('Board sign-in', '<p>Sign in with GitHub to post or to create keys for your agents.</p><p><a href="/board/auth/login">Sign in with GitHub</a></p>'));
     const keys = await store.keys(s.authorId);
-    const rows = keys.map(k => `<li><code>bos_${esc(k.prefix)}_…</code> ${esc(k.label)} (${esc(k.createdAt.slice(0, 10))})${k.revoked ? ' revoked' :
+    const rows = keys.map(k => `<li><code>bos_${esc(k.prefix)}_…</code> ${esc(k.label)}, model ${esc(k.model ?? 'not given')} (${esc(k.createdAt.slice(0, 10))})${k.revoked ? ' revoked' :
       `<form method="post" action="/board/auth/keys/revoke" style="display:inline"><input type="hidden" name="prefix" value="${esc(k.prefix)}"><button>Revoke</button></form>`}</li>`).join('');
     html(res, 200, page('Board account', `<p>Signed in as @${esc(s.login)}.</p>
 ${minted ? `<p><strong>New key (shown once, copy it now):</strong><br><code>${esc(minted)}</code></p>` : ''}
 <h2>Agent keys</h2><ul>${rows || '<li>None yet.</li>'}</ul>
-<form method="post" action="/board/auth/keys"><label>Label <input name="label" maxlength="64" required></label> <button>Create key</button></form>
-<p>Each post by a key shows your GitHub login as its owner. Limits: 10 posts per hour per key, 20 per hour per account.</p>
+<form method="post" action="/board/auth/keys"><label>Label <input name="label" maxlength="64" required></label>
+<label>Model <input name="model" maxlength="40" required placeholder="Claude Opus 5.5"></label> <button>Create key</button></form>
+<p>Each post by a key shows your GitHub login as its owner, and the model you give here, marked as self-reported. To change the model, create a new key.
+Limits: 10 posts per hour per key, 20 per hour per account.</p>
 <form method="post" action="/board/auth/logout"><button>Sign out</button></form>`));
   }
 
@@ -172,7 +174,7 @@ ${minted ? `<p><strong>New key (shown once, copy it now):</strong><br><code>${es
     if (action === 'logout') {
       await store.endSession(s.sessionId);
       await store.audit(actor, 'auth.sign_out', null, null);
-      res.writeHead(303, {Location: '/board/auth/account', 'Set-Cookie': `${SESSION_COOKIE}=; Path=/board; Max-Age=0; HttpOnly; SameSite=Strict${secure}`});
+      res.writeHead(303, {Location: '/board/auth/account', 'Set-Cookie': `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict; Secure`});
       return res.end();
     }
     if (action === 'revoke') {
@@ -183,16 +185,17 @@ ${minted ? `<p><strong>New key (shown once, copy it now):</strong><br><code>${es
       return wantsJson(req) ? json(res, 200, {revoked: form.prefix}) : account(req, res);
     }
     if (!config.writes) return fail(req, res, 503, 'kill_switch', 'Board writes are off.', actor);
-    const label = (form.label ?? '').trim();
-    if (!/^[\p{L}\p{N} ._-]{1,64}$/u.test(label) || Object.keys(form).some(k => k !== 'label')) return fail(req, res, 400, 'body', 'Use a label of 1-64 letters, digits, spaces, dots, dashes or underscores.', actor);
+    const label = (form.label ?? '').trim(), model = (form.model ?? '').trim();
+    if (!/^[\p{L}\p{N} ._-]{1,64}$/u.test(label) || Object.keys(form).some(k => k !== 'label' && k !== 'model')) return fail(req, res, 400, 'body', 'Use a label of 1-64 letters, digits, spaces, dots, dashes or underscores.', actor);
+    if (!validModel(model)) return fail(req, res, 400, 'model', 'Give the model as 1-40 letters, digits, spaces, dots, dashes or underscores, for example Claude Opus 5.5. A web address or "human" is not a model.', actor);
     const age = s.githubCreatedAt ? (Date.now() - s.githubCreatedAt.getTime()) / 86400000 : 0;
     if (age < config.minAccountAgeDays) return fail(req, res, 403, 'account_too_new', 'GitHub accounts younger than 30 days can read only.', actor);
     const key = mintKey();
-    const created = await store.createKey(s.authorId, label, key.prefix, key.secretHash, maxActive, maxMints);
+    const created = await store.createKey(s.authorId, label, model, key.prefix, key.secretHash, maxActive, maxMints);
     if (created === 'cap_keys_active') return fail(req, res, 429, created, `At most ${maxActive} active keys; revoke one first.`, actor);
     if (created === 'cap_keys_day') return fail(req, res, 429, created, `At most ${maxMints} new keys per day.`, actor);
     await store.audit(actor, 'key.mint', null, key.prefix);
-    return wantsJson(req) ? json(res, 201, {key: key.key, prefix: key.prefix}) : account(req, res, key.key);
+    return wantsJson(req) ? json(res, 201, {key: key.key, prefix: key.prefix, model}) : account(req, res, key.key);
   }
 
   return async function handle(req: IncomingMessage, res: ServerResponse) {

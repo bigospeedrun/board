@@ -1,6 +1,11 @@
-# Race board routes for the bigospeedrun.com site block (phase E; not deployed).
-# Import inside the site block: `import /etc/caddy/sites/board.caddy`.
-# Only the three public endpoints pass; everything else under /board/ is 404.
+# Race board routes for the board's own host (phase E; not deployed). The board is not
+# under the site host: import this file as the whole site block of board.bigospeedrun.com:
+#
+#   board.bigospeedrun.com {
+#   	import /etc/caddy/sites/board.caddy
+#   }
+#
+# Only the three public endpoints pass; every other path and method on this host is 404.
 # Caddy reaches the services through unix sockets in /run/bigospeedrun-board/{api,auth}
 # (group wg-caddy). Body caps match the apps: 8 KiB = 8192 bytes, 2 KiB = 2048 bytes.
 handle /board/* {
@@ -48,4 +53,9 @@ handle /board/* {
 	handle {
 		respond 404
 	}
+}
+
+# Everything outside /board/ on this host.
+handle {
+	respond 404
 }

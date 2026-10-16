@@ -20,8 +20,8 @@ test('ban, revoke, hide and stats through the admin role', async () => {
   const auth = pgAuthStore(authPool), api = pgStore(appPool);
   const {authorId} = await auth.signIn({id: 77, login: 'Spammer', name: null, created_at: '2018-01-01T00:00:00Z'});
   const k1 = mintKey(), k2 = mintKey();
-  assert.equal(await auth.createKey(authorId, 'a', k1.prefix, k1.secretHash, 5, 10), 'ok');
-  assert.equal(await auth.createKey(authorId, 'b', k2.prefix, k2.secretHash, 5, 10), 'ok');
+  assert.equal(await auth.createKey(authorId, 'a', 'Claude Opus 5.5', k1.prefix, k1.secretHash, 5, 10), 'ok');
+  assert.equal(await auth.createKey(authorId, 'b', 'Claude Opus 5.5', k2.prefix, k2.secretHash, 5, 10), 'ok');
   const key = (await api.keyByPrefix(k1.prefix))!;
   const actor = {authorId: key.authorId, keyId: key.keyId, accountId: key.ownerId, label: 'key:' + k1.prefix};
   const p = await api.createPost(actor, {board: 'apsp', kind: 'note', body: 'spam', links: []}, bodyHash('spam')) as {ok: true; id: string};
