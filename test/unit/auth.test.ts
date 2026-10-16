@@ -22,10 +22,10 @@ function fakes(opts: {banned?: boolean; createdDaysAgo?: number; githubDown?: bo
     async session(hash) { return sessions.get(hash.toString('hex')) ?? null; },
     async endSession(id) { for (const [k, v] of sessions) if (v.sessionId === id) sessions.delete(k); },
     async keys(owner) { return keys.filter(k => k.owner === owner); },
-    async createKey(owner, label, model, prefix, _hash, maxActive, maxPerDay) {
+    async createKey(owner, label, prefix, _hash, maxActive, maxPerDay) {
       if (keys.filter(k => k.owner === owner && !k.revoked).length >= maxActive) return 'cap_keys_active';
       if (keys.filter(k => k.owner === owner).length >= maxPerDay) return 'cap_keys_day';
-      keys.push({owner, label, model, prefix, createdAt: '2026-10-16', revoked: false}); return 'ok';
+      keys.push({owner, label, prefix, createdAt: '2026-10-16', revoked: false}); return 'ok';
     },
     async revokeKey(owner, prefix) { const k = keys.find(x => x.owner === owner && x.prefix === prefix); if (k) k.revoked = true; return !!k; },
     async audit(actor, action, rule) { audits.push(action + (rule ? ':' + rule : '')); },
@@ -121,13 +121,13 @@ test('callback: forged state 400, GitHub down 502, banned 403, good sign-in sets
 test('mint and revoke: the key is shown once, revoke works, and the page escapes text', async () => {
   const s = await serve();
   const {cookie} = await s.signIn();
-  const minted = await s.write('/board/auth/keys', {label: 'my agent', model: ' Claude Opus 5.5 '}, cookie);
-  assert.equal(minted.status, 201); assert.equal(minted.json.model, 'Claude Opus 5.5');
-  assert.equal(s.keys[0].model, 'Claude Opus 5.5');
+  const minted = await s.write('/board/auth/keys', {label: ' my agent '}, cookie);
+  assert.equal(minted.status, 201); assert.equal(minted.json.agent, 'my agent');
+  assert.equal(s.keys[0].label, 'my agent');
   assert.ok(parseKey('Bearer ' + minted.json.key));
   const page = await s.call('GET', '/board/auth/account', undefined, {Cookie: `__Host-bos_board_session=${cookie}`});
-  assert.match(page.text, /Signed in as @alice/); assert.match(page.text, /<strong>my agent<\/strong>, Claude Opus 5\.5, created <time datetime="\d{4}-/);
-  assert.match(page.text, /<input id="key-model" name="model" maxlength="40" required/); assert.doesNotMatch(page.text, new RegExp(minted.json.key));
+  assert.match(page.text, /Signed in as @alice/); assert.match(page.text, /<strong>my agent<\/strong>, created <time datetime="\d{4}-/);
+  assert.match(page.text, /<input id="key-label" name="label" maxlength="64" required>/); assert.doesNotMatch(page.text, /name="model"/); assert.doesNotMatch(page.text, new RegExp(minted.json.key));
   assert.match(page.headers['content-security-policy'], /default-src 'none'/);
   assert.equal((await s.write('/board/auth/keys/revoke', {prefix: minted.json.prefix}, cookie)).status, 200);
   assert.equal(s.keys[0].revoked, true);
@@ -138,44 +138,41 @@ test('mint and revoke: the key is shown once, revoke works, and the page escapes
 test('mint refusals: cross origin, no session, young account, caps, kill switch, size, unknown field', async () => {
   const s = await serve();
   const {cookie} = await s.signIn();
-  const m = 'Claude Opus 5.5';
-  assert.equal((await s.write('/board/auth/keys', {label: 'x', model: m}, cookie, {Origin: 'https://evil.example'})).status, 403);
+  assert.equal((await s.write('/board/auth/keys', {label: 'x'}, cookie, {Origin: 'https://evil.example'})).status, 403);
   // The site host is a different origin from the board host now.
-  assert.equal((await s.write('/board/auth/keys', {label: 'x', model: m}, cookie, {Origin: 'https://bigospeedrun.com'})).status, 403);
-  assert.equal((await s.write('/board/auth/keys', {label: 'x', model: m}, 'A'.repeat(43))).status, 401);
-  assert.equal((await s.write('/board/auth/keys', {label: 'x', model: m, admin: 'yes'}, cookie)).status, 400);
-  assert.equal((await s.write('/board/auth/keys', {label: '<script>', model: m}, cookie)).status, 400);
-  assert.equal((await s.write('/board/auth/keys', {label: 'x'.repeat(3000), model: m}, cookie)).status, 413);
-  for (let i = 0; i < 5; i++) assert.equal((await s.write('/board/auth/keys', {label: 'k' + i, model: m}, cookie)).status, 201);
-  assert.equal((await s.write('/board/auth/keys', {label: 'k6', model: m}, cookie)).json.error.rule, 'cap_keys_active');
+  assert.equal((await s.write('/board/auth/keys', {label: 'x'}, cookie, {Origin: 'https://bigospeedrun.com'})).status, 403);
+  assert.equal((await s.write('/board/auth/keys', {label: 'x'}, 'A'.repeat(43))).status, 401);
+  assert.equal((await s.write('/board/auth/keys', {label: 'x', admin: 'yes'}, cookie)).status, 400);
+  assert.equal((await s.write('/board/auth/keys', {label: '<script>'}, cookie)).status, 400);
+  assert.equal((await s.write('/board/auth/keys', {label: 'x'.repeat(3000)}, cookie)).status, 413);
+  for (let i = 0; i < 5; i++) assert.equal((await s.write('/board/auth/keys', {label: 'k' + i}, cookie)).status, 201);
+  assert.equal((await s.write('/board/auth/keys', {label: 'k6'}, cookie)).json.error.rule, 'cap_keys_active');
   const young = await serve({}, {createdDaysAgo: 3});
-  assert.equal((await young.write('/board/auth/keys', {label: 'x', model: m}, (await young.signIn()).cookie)).json.error.rule, 'account_too_new');
+  assert.equal((await young.write('/board/auth/keys', {label: 'x'}, (await young.signIn()).cookie)).json.error.rule, 'account_too_new');
   // With writes off sign-in refuses, so make the session directly in the fake store.
   const off = await serve({BOARD_WRITES: 'off'});
   const session = newSessionToken();
   await off.store.createSession('a1', session.tokenHash);
-  assert.equal((await off.write('/board/auth/keys', {label: 'x', model: 'm'}, session.token)).status, 503);
+  assert.equal((await off.write('/board/auth/keys', {label: 'x'}, session.token)).status, 503);
 });
 
 test('sign out ends the session', async () => {
   const s = await serve();
   const {cookie} = await s.signIn();
   assert.equal((await s.write('/board/auth/logout', {}, cookie)).status, 303);
-  assert.equal((await s.write('/board/auth/keys', {label: 'x', model: 'm'}, cookie)).status, 401);
+  assert.equal((await s.write('/board/auth/keys', {label: 'x'}, cookie)).status, 401);
 });
 
-test('model label: required at mint; links, markup and "human" are refused before the store', async () => {
+test('a key has only its agent name: a model field at mint is refused like any unknown field', async () => {
   const s = await serve();
   const {cookie} = await s.signIn();
-  for (const model of [undefined, '', 'https://evil.example', 'evil.com', '[x](https://y)', '<b>m</b>', 'human', 'x'.repeat(41), 'a\u202eb']) {
-    const r = await s.write('/board/auth/keys', model === undefined ? {label: 'k'} : {label: 'k', model}, cookie);
-    assert.equal(r.status, 400, JSON.stringify(model)); assert.equal(r.json.error.rule, 'model');
-  }
+  const r = await s.write('/board/auth/keys', {label: 'k', model: 'Claude Opus 5.5'}, cookie);
+  assert.equal(r.status, 400); assert.equal(r.json.error.rule, 'body');
   assert.equal(s.keys.length, 0);
-  // The account form posts label and model as a form, too.
-  const form = await s.call('POST', '/board/auth/keys', 'label=bot&model=GPT-5.1+Codex',
+  // The account form posts the agent name as a form, too.
+  const form = await s.call('POST', '/board/auth/keys', 'label=proof-search',
     {'Content-Type': 'application/x-www-form-urlencoded', Origin: ORIGIN, Cookie: `__Host-bos_board_session=${cookie}`});
-  assert.equal(form.status, 200); assert.equal(s.keys[0].model, 'GPT-5.1 Codex');
+  assert.equal(form.status, 200); assert.equal(s.keys[0].label, 'proof-search');
 });
 
 test('review fixes: refusals are batched, never one audit row per request', async () => {

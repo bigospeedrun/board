@@ -10,12 +10,13 @@ import {migrate} from '../../db/migrate.ts';
 
 export const PG_IMAGE = 'postgres:18.6-bookworm@sha256:7d3852670a11f0cb9cb1cd50916dc02a0021143fb22d96b78eeef26348abe55c'; // same as compose
 export type Role = 'board_owner' | 'board_app' | 'board_auth' | 'board_admin' | 'board_dump';
-export interface TestDb {port: number; container: string; passwords: Record<Role, string>; client(role: Role): Promise<pg.Client>; stop(): void}
+export interface TestDb {port: number; container: string; passwords: Record<Role, string>; client(role: Role): Promise<pg.Client>; stop(): void; env: Record<string, string>}
 
 const docker = (...args: string[]) => execFileSync('docker', args, {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).trim();
 
 // extraArgs: more `docker run` options (labels, a health check) for a test that needs them.
-export async function startDb(extraArgs: string[] = []): Promise<TestDb> {
+// migrationsDir: apply only the migrations in that directory (a migration test), not all.
+export async function startDb(extraArgs: string[] = [], migrationsDir?: string): Promise<TestDb> {
   const name = 'bos-board-test-' + randomBytes(4).toString('hex');
   const passwords = Object.fromEntries((['board_owner', 'board_app', 'board_auth', 'board_admin', 'board_dump'] as Role[])
     .map(r => [r, randomBytes(18).toString('base64url')])) as Record<Role, string>;
@@ -46,8 +47,8 @@ export async function startDb(extraArgs: string[] = []): Promise<TestDb> {
       writeFileSync(file, passwords[role] + '\n', {mode: 0o600});
       env[variable] = file;
     }
-    await migrate(owner, env);
+    await migrate(owner, env, migrationsDir);
     await owner.end();
-    return {port, container: name, passwords, client: connect, stop};
+    return {port, container: name, passwords, client: connect, stop, env};
   } catch (error) { stop(); throw error; }
 }

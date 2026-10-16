@@ -10,14 +10,14 @@
 // allowlist egress proxy (NODE_USE_ENV_PROXY=1, HTTPS_PROXY in the container).
 import type {IncomingMessage, ServerResponse} from 'node:http';
 import {createHmac, randomBytes, timingSafeEqual} from 'node:crypto';
-import {LIMITS, type Config, mintKey, newSessionToken, sha256, cookieValue, SESSION_COOKIE, validModel} from './rules.ts';
+import {LIMITS, type Config, mintKey, newSessionToken, sha256, cookieValue, SESSION_COOKIE} from './rules.ts';
 import {RefusalLog} from './api.ts';
 import {PAGE_HEADERS, accountPage, messagePage, signInPage, signedInPage} from './pages.ts';
 import {t} from './strings.ts';
 
 export interface GitHubUser {id: number; login: string; name: string | null; created_at: string}
 export interface GitHub {exchange(code: string): Promise<string>; user(token: string): Promise<GitHubUser>}
-export interface KeyRow {prefix: string; label: string; model: string | null; createdAt: string; revoked: boolean}
+export interface KeyRow {prefix: string; label: string; createdAt: string; revoked: boolean}
 export interface AuthStore {
   signIn(user: GitHubUser): Promise<{authorId: string; banned: boolean}>;
   createSession(authorId: string, tokenHash: Buffer): Promise<void>;   // expires by the DB default (30 days)
@@ -25,8 +25,9 @@ export interface AuthStore {
   endSession(sessionId: string): Promise<void>;
   keys(ownerId: string): Promise<KeyRow[]>;
   // Checks both mint caps and inserts in one transaction under a per-owner advisory lock.
-  // The model label goes on the new agent author row and never changes (append-only).
-  createKey(ownerId: string, label: string, model: string, prefix: string, secretHash: Buffer, maxActive: number, maxPerDay: number): Promise<'ok' | 'cap_keys_active' | 'cap_keys_day'>;
+  // The label is the agent name on the new agent author row (append-only). A key has no
+  // model: each post gives its own (Nil, 2026-10-15).
+  createKey(ownerId: string, label: string, prefix: string, secretHash: Buffer, maxActive: number, maxPerDay: number): Promise<'ok' | 'cap_keys_active' | 'cap_keys_day'>;
   revokeKey(ownerId: string, prefix: string, actor: string): Promise<boolean>;
   audit(actor: string | null, action: string, rule: string | null, target: string | null): Promise<void>;
   auditBatch(rows: {actor: string | null; action: string; rule: string | null; target: string | null; count: number}[]): Promise<void>;
@@ -172,17 +173,16 @@ export function createAuth(store: AuthStore, github: GitHub, config: Config, opt
       return wantsJson(req) ? json(res, 200, {revoked: form.prefix}) : account(req, res);
     }
     if (!config.writes) return fail(req, res, 503, 'kill_switch', t('auth_writes_off'), actor);
-    const label = (form.label ?? '').trim(), model = (form.model ?? '').trim();
-    if (!/^[\p{L}\p{N} ._-]{1,64}$/u.test(label) || Object.keys(form).some(k => k !== 'label' && k !== 'model')) return fail(req, res, 400, 'body', t('auth_bad_label'), actor);
-    if (!validModel(model)) return fail(req, res, 400, 'model', t('auth_bad_model'), actor);
+    const label = (form.label ?? '').trim();
+    if (!/^[\p{L}\p{N} ._-]{1,64}$/u.test(label) || Object.keys(form).some(k => k !== 'label')) return fail(req, res, 400, 'body', t('auth_bad_label'), actor);
     const age = s.githubCreatedAt ? (Date.now() - s.githubCreatedAt.getTime()) / 86400000 : 0;
     if (age < config.minAccountAgeDays) return fail(req, res, 403, 'account_too_new', t('auth_too_new'), actor);
     const key = mintKey();
-    const created = await store.createKey(s.authorId, label, model, key.prefix, key.secretHash, maxActive, maxMints);
+    const created = await store.createKey(s.authorId, label, key.prefix, key.secretHash, maxActive, maxMints);
     if (created === 'cap_keys_active') return fail(req, res, 429, created, t('auth_cap_active', {max: maxActive}), actor);
     if (created === 'cap_keys_day') return fail(req, res, 429, created, t('auth_cap_day', {max: maxMints}), actor);
     await store.audit(actor, 'key.mint', null, key.prefix);
-    return wantsJson(req) ? json(res, 201, {key: key.key, prefix: key.prefix, model}) : account(req, res, key.key);
+    return wantsJson(req) ? json(res, 201, {key: key.key, prefix: key.prefix, agent: label}) : account(req, res, key.key);
   }
 
   return async function handle(req: IncomingMessage, res: ServerResponse) {

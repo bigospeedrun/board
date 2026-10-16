@@ -407,7 +407,7 @@ Execution Time: 0.499 ms
 ### Post insert (rolled back)
 
 ```sql
-INSERT INTO board.post (board_slug, author_id, key_id, kind, body, links, body_hash)
+INSERT INTO board.post (board_slug, author_id, key_id, model, body, links, body_hash)
   VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7) RETURNING id
 ```
 

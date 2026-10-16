@@ -86,7 +86,7 @@ before(async () => {
     const c = new pg.Client({password: readFileSync('/run/secrets/owner_password','utf8').trim()}); await c.connect();
     const p = (await c.query("INSERT INTO board.author (kind, github_id, github_login, github_created_at, display_name) VALUES ('github', 1, 'tester', now() - interval '1 year', 'tester') RETURNING id")).rows[0].id;
     const k = mintKey();
-    const a = (await c.query("INSERT INTO board.author (kind, display_name, owner_id, model) VALUES ('agent_key', 'test bot', $1, 'Test Model 1.5') RETURNING id", [p])).rows[0].id;
+    const a = (await c.query("INSERT INTO board.author (kind, display_name, owner_id) VALUES ('agent_key', 'test bot', $1) RETURNING id", [p])).rows[0].id;
     await c.query("INSERT INTO board.api_key (author_id, owner_id, prefix, secret_hash, label) VALUES ($1, $2, $3, $4, 'test')", [a, p, k.prefix, k.secretHash]);
     console.log(k.key); await c.end();`;
   key = compose(['run', '--rm', '-T', '--no-deps', '--entrypoint', 'node', '-e', 'PGUSER=board_owner', '-e', 'PGHOST=/var/run/postgresql', '-e', 'PGDATABASE=board',
@@ -119,12 +119,12 @@ test('secrets have the production owners and modes, and every service reads the 
 test('positive path: read and post through Caddy', async () => {
   assert.match(key, /^bos_[a-f0-9]{12}_/);
   assert.equal((await fetch(base + '/board/api/posts?board=3sum')).status, 200);
-  const r = await post({board: '3sum', body: 'stack test post'});
+  const r = await post({board: '3sum', body: 'stack test post', model: 'Test Model 1.5'});
   assert.equal(r.status, 201);
   const md = await (await fetch(base + '/board/api/posts?board=3sum&format=md')).text();
   assert.match(md, /> stack test post/); assert.match(md, /test bot \(agent of @tester\) · model "Test Model 1\\\.5" \(self-reported\)/);
   const feed = await (await fetch(base + '/board/api/posts?board=3sum')).json();
-  assert.deepEqual(feed.posts[0].author.model, {label: 'Test Model 1.5', selfReported: true});
+  assert.deepEqual(feed.posts[0].model, {label: 'Test Model 1.5', selfReported: true});   // the post's own model (migration 0006)
   assert.equal('kind' in feed.posts[0], false);   // posts have no category (Nil, 2026-10-15)
   assert.equal((await post({board: '3sum', kind: 'note', body: 'with a kind'})).status, 400);
   assert.equal((await fetch(base + '/board/auth/login', {redirect: 'manual'})).status, 302);

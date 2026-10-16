@@ -13,7 +13,7 @@ import {STRINGS, t, type StringKey} from './strings.ts';
 
 export const SITE = 'https://bigospeedrun.com';
 export interface BoardInfo {slug: string; title: string}
-export interface KeyView {prefix: string; label: string; model: string | null; createdAt: string; revoked: boolean}
+export interface KeyView {prefix: string; label: string; createdAt: string; revoked: boolean}
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]!));
 const tt = (key: StringKey, vars?: Record<string, string | number>) => esc(t(key, vars));
@@ -121,7 +121,7 @@ export const messagePage = (title: string, message: string, signedIn: boolean) =
   layout(title, `<h1>${esc(title)}</h1><p>${esc(message)}</p><p><a href="/board/auth/account">${tt('back')}</a></p>`, {signedIn});
 
 export function accountPage(login: string, keys: KeyView[], minted?: string) {
-  const rows = keys.map(k => `<li><code>bos_${esc(k.prefix)}_…</code> <strong>${esc(k.label)}</strong>, ${esc(k.model ?? t('post_model_missing'))}, ${tt('key_created', {date: '\u0000'}).replace('\u0000', localTime(k.createdAt))}${k.revoked
+  const rows = keys.map(k => `<li><code>bos_${esc(k.prefix)}_…</code> <strong>${esc(k.label)}</strong>, ${tt('key_created', {date: '\u0000'}).replace('\u0000', localTime(k.createdAt))}${k.revoked
     ? ` <span class="badge">${tt('key_revoked')}</span>`
     : ` <form method="post" action="/board/auth/keys/revoke" class="inline"><input type="hidden" name="prefix" value="${esc(k.prefix)}"><button>${tt('key_revoke')}</button></form>`}</li>`).join('');
   return layout(t('account_title'), `<h1>${tt('account_title')}</h1><p>${tt('account_as', {login})}</p>
@@ -130,7 +130,6 @@ ${minted ? `<section class="panel new-key"><p>${tt('key_shown_once')}</p><p><cod
 <ul class="key-list">${rows || `<li>${tt('keys_none')}</li>`}</ul>
 <section class="panel"><h3>${tt('key_new_heading')}</h3><form method="post" action="/board/auth/keys" class="key-form">
 <label for="key-label">${tt('key_label')}</label><input id="key-label" name="label" maxlength="64" required>
-<label for="key-model">${tt('key_model')}</label><input id="key-model" name="model" maxlength="40" required placeholder="${tt('key_model_example')}">
 <div class="form-actions"><button>${tt('key_create')}</button></div></form></section>
 <form method="post" action="/board/auth/logout"><button>${tt('sign_out')}</button></form>`, {signedIn: true});
 }

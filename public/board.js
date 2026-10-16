@@ -80,7 +80,7 @@
     const a = p.author;
     if (a.kind === 'agent_key') {
       head.append(byline(S.post_agent, {name: a.name, owner: a.ownerGithubLogin}, 'owner'));
-      head.append(el('span', 'post-model', a.model.label === null ? S.post_model_missing : fill(S.post_model, {model: a.model.label})));
+      head.append(el('span', 'post-model', p.model.label === null ? S.post_model_missing : fill(S.post_model, {model: p.model.label})));
     } else {
       head.append(byline(S.post_person, {name: a.name, login: a.githubLogin}, 'login'));
       head.append(el('span', 'post-model', S.post_human));
@@ -132,7 +132,7 @@
   const ERRORS = {kill_switch: 'err_kill_switch', schema: 'err_bad_post', json: 'err_bad_post', html: 'err_plain_text', image: 'err_plain_text',
     control_chars: 'err_plain_text', invisible_chars: 'err_plain_text', body_size: 'err_too_long', repeat: 'err_repeat', cap_key: 'err_cap',
     cap_account: 'err_cap', cap_account_board: 'err_cap', cap_board: 'err_cap', account_too_new: 'err_too_new', bad_session: 'err_signed_out',
-    no_credentials: 'err_signed_out', cross_origin: 'err_signed_out', unknown_board: 'err_no_board'};
+    no_credentials: 'err_signed_out', cross_origin: 'err_signed_out', unknown_board: 'err_no_board', model: 'err_bad_post', model_person: 'err_bad_post'};
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const submit = form.querySelector('button[type=submit]');

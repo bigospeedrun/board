@@ -52,6 +52,6 @@ test('board-auth hot queries use indexes', async () => {
 });
 
 test('the guard detects a sequential scan on post', async () => {
-  const plan = (await app.query(`EXPLAIN (FORMAT JSON) SELECT count(*) FROM board.post WHERE kind = 'note'`)).rows[0]['QUERY PLAN'][0].Plan;
+  const plan = (await app.query(`EXPLAIN (FORMAT JSON) SELECT count(*) FROM board.post WHERE model = 'GPT-5.1 Codex'`)).rows[0]['QUERY PLAN'][0].Plan;
   assert.ok(seqScans(plan).includes('post'));
 });

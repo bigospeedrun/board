@@ -32,7 +32,7 @@ test('board_app: SELECT and INSERT post only; no UPDATE, DELETE, TRUNCATE, DDL, 
   const author = await person(auth);
   await auth.end();
   const app = await db.client('board_app');
-  const post = (await app.query(`INSERT INTO board.post (board_slug, author_id, kind, body, body_hash) VALUES ('3sum', $1, 'note', 'hello', $2) RETURNING id`, [author, hash()])).rows[0].id;
+  const post = (await app.query(`INSERT INTO board.post (board_slug, author_id, body, body_hash) VALUES ('3sum', $1, 'hello', $2) RETURNING id`, [author, hash()])).rows[0].id;
   assert.equal((await app.query('SELECT body FROM board.visible_post WHERE id = $1', [post])).rows[0].body, 'hello');
   await denied(app, `UPDATE board.post SET body = 'x' WHERE id = $1`, [post]);
   await denied(app, `DELETE FROM board.post WHERE id = $1`, [post]);
@@ -56,8 +56,8 @@ test('review fixes: INSERT is granted per column, so ids and times keep their de
   await denied(auth, `INSERT INTO board.audit_log (at, action) VALUES (now() - interval '1 year', 'x')`);
   await auth.end();
   const app = await db.client('board_app');
-  await denied(app, `INSERT INTO board.post (board_slug, author_id, kind, body, body_hash, created_at) VALUES ('3sum', $1, 'note', 'x', $2, now() - interval '2 hours')`, [author, hash()]);
-  await denied(app, `INSERT INTO board.post (id, board_slug, author_id, kind, body, body_hash) VALUES (gen_random_uuid(), '3sum', $1, 'note', 'x', $2)`, [author, hash()]);
+  await denied(app, `INSERT INTO board.post (board_slug, author_id, body, body_hash, created_at) VALUES ('3sum', $1, 'x', $2, now() - interval '2 hours')`, [author, hash()]);
+  await denied(app, `INSERT INTO board.post (id, board_slug, author_id, body, body_hash) VALUES (gen_random_uuid(), '3sum', $1, 'x', $2)`, [author, hash()]);
   await app.end();
   const admin = await db.client('board_admin');
   await denied(admin, `INSERT INTO board.ban (author_id, by_actor, reason, at) VALUES ($1, 'x', 'x', now() - interval '1 day')`, [author]);
@@ -67,7 +67,7 @@ test('review fixes: INSERT is granted per column, so ids and times keep their de
 test('board_auth: writes accounts, keys and sessions, never posts or bans', async () => {
   const auth = await db.client('board_auth');
   const author = await person(auth);
-  await denied(auth, `INSERT INTO board.post (board_slug, author_id, kind, body, body_hash) VALUES ('3sum', $1, 'note', 'x', $2)`, [author, hash()]);
+  await denied(auth, `INSERT INTO board.post (board_slug, author_id, body, body_hash) VALUES ('3sum', $1, 'x', $2)`, [author, hash()]);
   await denied(auth, `INSERT INTO board.ban (author_id, by_actor, reason) VALUES ($1, 'x', 'x')`, [author]);
   await denied(auth, `UPDATE board.author SET display_name = 'x'`);
   await auth.end();
@@ -90,8 +90,8 @@ test('views: a hide, a ban of the owner and a key revocation take effect by new 
     [agent, owner, randomBytes(6).toString('hex'), hash()])).rows[0].id;
   await auth.end();
   const app = await db.client('board_app');
-  const p1 = (await app.query(`INSERT INTO board.post (board_slug, author_id, key_id, kind, body, body_hash) VALUES ('apsp', $1, $2, 'result', 'r1', $3) RETURNING id`, [agent, key, hash()])).rows[0].id;
-  const p2 = (await app.query(`INSERT INTO board.post (board_slug, author_id, key_id, kind, body, body_hash) VALUES ('apsp', $1, $2, 'note', 'r2', $3) RETURNING id`, [agent, key, hash()])).rows[0].id;
+  const p1 = (await app.query(`INSERT INTO board.post (board_slug, author_id, key_id, body, body_hash) VALUES ('apsp', $1, $2, 'r1', $3) RETURNING id`, [agent, key, hash()])).rows[0].id;
+  const p2 = (await app.query(`INSERT INTO board.post (board_slug, author_id, key_id, body, body_hash) VALUES ('apsp', $1, $2, 'r2', $3) RETURNING id`, [agent, key, hash()])).rows[0].id;
   const visible = async () => (await app.query('SELECT id FROM board.visible_post WHERE id = ANY($1)', [[p1, p2]])).rows.map(r => r.id).sort();
   const activeKey = async () => (await app.query('SELECT 1 FROM board.active_key WHERE id = $1', [key])).rowCount;
   assert.deepEqual(await visible(), [p1, p2].sort());
@@ -106,16 +106,16 @@ test('views: a hide, a ban of the owner and a key revocation take effect by new 
   await admin.end(); await app.end();
 });
 
-test('constraints refuse oversized bodies, too many links and unknown kinds', async () => {
+test('constraints refuse oversized bodies, too many links and bad models', async () => {
   const auth = await db.client('board_auth');
   const author = await person(auth);
   await auth.end();
   const app = await db.client('board_app');
-  const insert = (kind: string, body: string, links: string) => app.query(
-    `INSERT INTO board.post (board_slug, author_id, kind, body, links, body_hash) VALUES ('3sum', $1, $2, $3, $4::jsonb, $5)`, [author, kind, body, links, hash()]);
-  await assert.rejects(insert('note', 'x'.repeat(4001), '[]'), /check constraint/);
-  await assert.rejects(insert('note', 'x', JSON.stringify(Array(6).fill('https://github.com/a/b'))), /check constraint/);
-  await assert.rejects(insert('spam', 'x', '[]'), /check constraint/);
-  await assert.rejects(insert('note', '', '[]'), /check constraint/);
+  const insert = (model: string | null, body: string, links: string) => app.query(
+    `INSERT INTO board.post (board_slug, author_id, model, body, links, body_hash) VALUES ('3sum', $1, $2, $3, $4::jsonb, $5)`, [author, model, body, links, hash()]);
+  await assert.rejects(insert(null, 'x'.repeat(4001), '[]'), /check constraint/);
+  await assert.rejects(insert(null, 'x', JSON.stringify(Array(6).fill('https://github.com/a/b'))), /check constraint/);
+  await assert.rejects(insert('https://spam.example', 'x', '[]'), /check constraint/);
+  await assert.rejects(insert(null, '', '[]'), /check constraint/);
   await app.end();
 });

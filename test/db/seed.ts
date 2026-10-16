@@ -23,11 +23,11 @@ export async function seed(owner: pg.Client, posts = 1_000_000, people = 8000, a
   await owner.query(`CREATE TEMP TABLE boards AS SELECT slug, row_number() OVER (ORDER BY slug) - 1 AS n, count(*) OVER () AS total FROM board.board`);
   // 30% of posts on the hot board (3sum), the rest spread evenly; 40% by agents (with
   // their key), 60% by people; times spread over 90 days, about 1000 in the last hour.
-  await owner.query(`INSERT INTO board.post (board_slug, author_id, key_id, kind, body, links, body_hash, created_at)
+  await owner.query(`INSERT INTO board.post (board_slug, author_id, key_id, model, body, links, body_hash, created_at)
     SELECT CASE WHEN i % 10 < 3 THEN '3sum' ELSE (SELECT slug FROM boards WHERE n = i % (total) LIMIT 1) END,
            CASE WHEN i % 5 < 2 THEN ag.id ELSE pe.id END,
            CASE WHEN i % 5 < 2 THEN k.id END,
-           (ARRAY['note','result','failed_attempt','question','link'])[1 + i % 5],
+           CASE WHEN i % 5 < 2 THEN (ARRAY['Claude Opus 5.5','GPT-5.1 Codex'])[1 + i % 2] END,
            'Seeded post ' || i || '. Bound improved to 0.' || (i % 997) || ' under the stated model.', '[]',
            sha256(('p' || i)::bytea),
            CASE WHEN i % 1000 = 0 THEN now() - (random() * interval '1 hour') ELSE now() - (random() * interval '90 days') END
@@ -40,8 +40,8 @@ export async function seed(owner: pg.Client, posts = 1_000_000, people = 8000, a
   // (all in the last 500 s, more than the caps allow), so the feed must skip them all.
   const spammer = (await owner.query(`INSERT INTO board.author (kind, github_id, github_login, github_created_at, display_name)
     VALUES ('github', 99999999, 'spammer', now() - interval '2 years', 'spammer') RETURNING id`)).rows[0].id;
-  await owner.query(`INSERT INTO board.post (board_slug, author_id, kind, body, body_hash, created_at)
-    SELECT '3sum', $1, 'note', 'spam ' || i, sha256(('spam' || i)::bytea), now() - (i * interval '10 milliseconds') FROM generate_series(1, 50000) i`, [spammer]);
+  await owner.query(`INSERT INTO board.post (board_slug, author_id, body, body_hash, created_at)
+    SELECT '3sum', $1, 'spam ' || i, sha256(('spam' || i)::bytea), now() - (i * interval '10 milliseconds') FROM generate_series(1, 50000) i`, [spammer]);
   await owner.query(`INSERT INTO board.ban (author_id, by_actor, reason) SELECT id, 'seed', 'seed' FROM person WHERE n % 80 = 0 UNION ALL SELECT $1, 'seed', 'spam'`, [spammer]);
   await owner.query(`INSERT INTO board.hidden (post_id, by_actor, reason) SELECT id, 'seed', 'seed' FROM board.post TABLESAMPLE SYSTEM (1) LIMIT 10000`);
   await owner.query(`INSERT INTO board.key_revocation (key_id, by_actor, reason) SELECT k.id, 'seed', 'seed' FROM board.api_key k JOIN agent a ON a.id = k.author_id WHERE a.n % 10 = 0`);
