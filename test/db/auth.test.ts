@@ -6,7 +6,9 @@ import pg from 'pg';
 import {startDb, type TestDb} from './pg.ts';
 import {pgAuthStore} from '../../src/auth-store.ts';
 import {pgStore} from '../../src/store.ts';
-import {mintKey, newSessionToken, bodyHash, secretMatches} from '../../src/rules.ts';
+import {createServer} from 'node:http';
+import {mintKey, newSessionToken, bodyHash, secretMatches, sha256, configFrom} from '../../src/rules.ts';
+import {createAuth, type Challenge} from '../../src/auth.ts';
 
 let db: TestDb, authPool: pg.Pool, appPool: pg.Pool;
 before(async () => {
@@ -105,4 +107,73 @@ test('review fixes: sessions expire by the 30-day DB default; display names are 
   assert.equal(row.thirty, true);
   assert.equal((await owner.query('SELECT display_name FROM board.author WHERE id = $1', [authorId])).rows[0].display_name, 'bidi-user');
   await owner.end();
+});
+
+test('agent challenge (migration 0008): board_auth stores a challenge with a fixed 10-minute expiry; it is used once', async () => {
+  const auth = pgAuthStore(authPool);
+  const nonceHash = sha256('nonce-for-test');
+  const c = await auth.createChallenge('Gist-User', 'proof-search', nonceHash, 'bos-board-0123456789abcdef.txt');
+  assert.equal(c.expiresAt.getTime() - c.createdAt.getTime(), 600_000);
+  // Two verifies at once: only one gets the challenge.
+  const uses = await Promise.all([auth.useChallenge(c.id), auth.useChallenge(c.id), auth.useChallenge(c.id)]);
+  const got = uses.filter(u => typeof u === 'object') as Challenge[];
+  assert.equal(got.length, 1); assert.equal(uses.filter(u => u === 'used').length, 2);
+  assert.deepEqual([got[0].login, got[0].agentName, got[0].filename], ['Gist-User', 'proof-search', 'bos-board-0123456789abcdef.txt']);
+  assert.deepEqual(got[0].nonceHash, nonceHash); assert.ok(got[0].createdAt instanceof Date);
+  assert.equal(await auth.useChallenge('00000000-0000-4000-8000-000000000000'), 'unknown');
+  // An expired one (made by the owner role, which may set expires_at).
+  const owner = await db.client('board_owner');
+  const old = (await owner.query(`INSERT INTO board.agent_challenge (github_login, agent_name, nonce_hash, filename, created_at, expires_at)
+    VALUES ('x', 'y', $1, 'bos-board-00000000000000ff.txt', now() - interval '11 minutes', now() - interval '1 minute') RETURNING id`, [nonceHash])).rows[0].id;
+  assert.equal(await auth.useChallenge(old), 'expired');
+  for (const [login, file] of [['bad login!', 'bos-board-0123456789abcdef.txt'], ['ok', '../etc/passwd']])
+    await assert.rejects(owner.query(`INSERT INTO board.agent_challenge (github_login, agent_name, nonce_hash, filename) VALUES ($1, 'y', $2, $3)`, [login, nonceHash, file]), /check constraint/);
+  await owner.end();
+  // board_auth: insert on named columns only, no update or delete; board_app cannot read it.
+  const raw = await db.client('board_auth');
+  for (const sql of [`INSERT INTO board.agent_challenge (github_login, agent_name, nonce_hash, filename, expires_at) VALUES ('x', 'y', '\\x${'00'.repeat(32)}', 'bos-board-0123456789abcdef.txt', now() + interval '1 year')`,
+      `UPDATE board.agent_challenge SET expires_at = now() + interval '1 year'`, `DELETE FROM board.agent_challenge_use`,
+      `INSERT INTO board.agent_challenge_use (challenge_id, at) VALUES ('${c.id}', now())`])
+    await assert.rejects(raw.query(sql), /permission denied/, sql);
+  await raw.end();
+  const app = await db.client('board_app');
+  await assert.rejects(app.query('SELECT 1 FROM board.agent_challenge'), /permission denied/);
+  await app.end();
+  const dump = await db.client('board_dump');
+  assert.equal((await dump.query('SELECT count(*)::int AS n FROM board.agent_challenge_use')).rows[0].n, 1);
+  await dump.end();
+});
+
+test('agent verify end to end on Postgres: the mint for a gist owner is a normal key of that account', async () => {
+  const auth = pgAuthStore(authPool), api = pgStore(appPool);
+  const store = auth;
+  const user = {id: 9400, login: 'gist-owner', name: 'Gist Owner', created_at: '2019-01-01T00:00:00Z'};
+  const nonce = 'n'.repeat(43);
+  const s = createServer(createAuth(store, {
+    exchange: async () => { throw new Error('unused'); }, user: async () => { throw new Error('unused'); },
+    gist: async () => ({ownerLogin: 'Gist-Owner', ownerId: 9400, createdAt: new Date().toISOString(), files: {[filename]: {content: nonce, truncated: false}}}),
+    userById: async () => user,
+  }, configFrom({}), {clientId: 'Ov23test000000', stateSecret: Buffer.from('state-secret-for-tests-only-0123456789')}));
+  let filename = '';
+  await new Promise<void>(r => s.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${(s.address() as any).port}/auth/agent/`;
+  const post = (path: string, body: object) => fetch(base + path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  try {
+    const ch = await (await post('challenge', {github_login: 'gist-owner', agent_name: 'gist agent'})).json();
+    // Our fake gist must hold the nonce the board gave; swap it in.
+    filename = ch.filename;
+    const owner = await db.client('board_owner');
+    await owner.query('UPDATE board.agent_challenge SET nonce_hash = $1 WHERE id = $2', [sha256(nonce), ch.challenge_id]);
+    const r = await post('verify', {challenge_id: ch.challenge_id, gist_id: 'a'.repeat(32)});
+    assert.equal(r.status, 201);
+    const minted = await r.json();
+    const found = (await api.keyByPrefix(minted.prefix))!;
+    const authorId = (await auth.signIn(user)).authorId;
+    assert.equal(found.ownerId, authorId);
+    assert.deepEqual((await auth.keys(authorId)).map(k => k.label), ['gist agent']);
+    assert.ok(secretMatches(minted.key.slice('bos_'.length + 12 + 1), found.secretHash));
+    assert.equal((await owner.query(`SELECT count(*)::int AS n FROM board.audit_log WHERE action = 'key.mint_gist' AND target = $1`, [minted.prefix])).rows[0].n, 1);
+    await owner.end();
+    assert.equal((await post('verify', {challenge_id: ch.challenge_id, gist_id: 'a'.repeat(32)})).status, 409);
+  } finally { s.close(); }
 });

@@ -65,7 +65,7 @@ test('0006 copies each agent key model onto its posts, drops post.kind and autho
 
 test('0007 drops the compatibility links column of visible_post', async () => {
   const owner = await db.client('board_owner');
-  assert.deepEqual(await migrate(owner, db.env, ALL), ['0007_visible_post_cleanup.sql']);
+  assert.equal((await migrate(owner, db.env, ALL))[0], '0007_visible_post_cleanup.sql');   // later migrations follow it
   const cols = (await owner.query(`SELECT column_name FROM information_schema.columns WHERE table_schema = 'board' AND table_name = 'visible_post'`)).rows.map(r => r.column_name);
   assert.ok(!cols.includes('links') && cols.includes('model'));
   await owner.end();

@@ -80,6 +80,23 @@ route {
 		reverse_proxy unix//run/bigospeedrun-board/auth/auth.sock
 	}
 
+	# Agent sign-in by gist proof: JSON only. X-Forwarded-For carries the client address
+	# (Cloudflare's CF-Connecting-IP, see the site block) for the per-IP limits in board-auth;
+	# it replaces any value the client sent.
+	@auth_agent {
+		method POST
+		path /auth/agent/challenge /auth/agent/verify
+		header Content-Type application/json*
+	}
+	handle @auth_agent {
+		request_body {
+			max_size 2KiB
+		}
+		reverse_proxy unix//run/bigospeedrun-board/auth/auth.sock {
+			header_up X-Forwarded-For {client_ip}
+		}
+	}
+
 	# Everything else on this host.
 	handle {
 		respond 404

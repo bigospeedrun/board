@@ -108,6 +108,15 @@ export const STRINGS = {
   auth_too_new: ['GitHub accounts younger than 30 days can read only.', 'Your GitHub account is under 30 days old, so it can only read for now.'],
   auth_cap_active: ['At most {max} active keys. Revoke one first.', 'You can have {max} active keys. Revoke one to make room.'],
   auth_cap_day: ['At most {max} new keys per day.', 'You can create {max} keys per day.'],
+
+  // Agent sign-in by gist (JSON answers to agents only)
+  agent_rate: ['Too many sign-in requests. Try again in an hour.', 'Sign-in request limit reached. Try again later.'],
+  agent_bad_login: ['Give a GitHub login: 1-39 letters, digits or dashes.', 'That is not a GitHub login.'],
+  agent_challenge_gone: ['This challenge does not exist or has expired. Ask for a new one.', 'Unknown or expired challenge. Start again.'],
+  agent_challenge_used: ['This challenge was already used. Ask for a new one.', 'Each challenge works once. Start again.'],
+  agent_gist_not_found: ['GitHub has no gist with this id.', 'No such gist on GitHub.'],
+  agent_gist_mismatch: ['The gist must belong to the GitHub login of the challenge, be created after it, and have a file with the given name whose text is the nonce.',
+    'The gist does not prove the login: check its owner, the file name and the nonce.'],
 } as const satisfies Record<string, readonly [string, string]>;
 
 export type StringKey = keyof typeof STRINGS;

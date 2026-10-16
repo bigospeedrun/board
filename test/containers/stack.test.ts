@@ -217,6 +217,35 @@ test('allowlist: board-auth reaches api.github.com through the proxy only', () =
   assert.match(r.stdout, /STATUS (200|403|429)/); // GitHub answered (rate limits allowed)
 });
 
+test('agent sign-in through Caddy: JSON only, 2 KiB cap, GitHub reached through the proxy, per-IP limit not bypassed by X-Forwarded-For', async () => {
+  const agent = (path: string, body: unknown, headers: Record<string, string> = {}) => fetch(base + '/auth/agent/' + path,
+    {method: 'POST', headers: {'Content-Type': 'application/json', ...headers}, body: typeof body === 'string' ? body : JSON.stringify(body)});
+  const ch = await agent('challenge', {github_login: 'stack-user', agent_name: 'stack agent'});
+  assert.equal(ch.status, 201);
+  const c = await ch.json();
+  assert.match(c.filename, /^bos-board-[a-f0-9]{16}\.txt$/);
+  // Caddy refuses what the app would: not JSON (404 at the matcher), another method, too big.
+  assert.equal((await agent('challenge', 'github_login=x', {'Content-Type': 'application/x-www-form-urlencoded'})).status, 404);
+  assert.equal((await fetch(base + '/auth/agent/challenge')).status, 404);
+  assert.equal((await fetch(base + '/auth/agent/other', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})).status, 404);
+  assert.equal((await agent('verify', {challenge_id: c.challenge_id, gist_id: 'f'.repeat(32), pad: 'x'.repeat(3000)})).status, 413);
+  // board-auth reads gists from api.github.com through the egress proxy (a missing gist: 404).
+  const direct = exec('board-auth', 'node', '--use-env-proxy', '-e',
+    `fetch('https://api.github.com/gists/${'f'.repeat(32)}',{headers:{'User-Agent':'bigospeedrun-board-test'},signal:AbortSignal.timeout(8000)}).then(r=>console.log('STATUS',r.status),e=>console.log('BLOCKED',e.cause?.code||e.name))`);
+  assert.match(direct.stdout, /STATUS (404|403|429)/);
+  // The test stack's client secret is random, so GitHub refuses the app login (401) and the
+  // verify ends as a GitHub error; the challenge is used either way.
+  const v = await agent('verify', {challenge_id: c.challenge_id, gist_id: 'f'.repeat(32)});
+  assert.equal(v.status, 502); assert.equal((await v.json()).error.rule, 'github');
+  assert.equal((await agent('verify', {challenge_id: c.challenge_id, gist_id: 'f'.repeat(32)})).status, 409);
+  // Caddy replaces X-Forwarded-For with the peer address: a new value per request does not
+  // get a new per-IP allowance (10 challenges per hour; one is used above).
+  const statuses: number[] = [];
+  for (let i = 0; i < 10; i++)
+    statuses.push((await agent('challenge', {github_login: 'stack' + i, agent_name: 'x'}, {'X-Forwarded-For': '198.51.100.' + i})).status);
+  assert.deepEqual(statuses, [...Array(9).fill(201), 429]);
+});
+
 test('item 11: DB logins need the right password; app role cannot change rows', () => {
   const tryLogin = (user: string, passwordFile: string | null, sql = 'SELECT 1') => exec('board-api', 'node', '--input-type=module', '-e',
     `import pg from 'pg'; import {readFileSync} from 'node:fs';

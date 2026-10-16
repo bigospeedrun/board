@@ -48,7 +48,8 @@ await owner.query('INSERT INTO board.session (token_hash, author_id) VALUES ($1,
 await owner.end();
 
 const config = configFrom({BOARD_ORIGIN: origin});
-const github: GitHub = {exchange: async () => { throw new Error('no GitHub in the preview'); }, user: async () => { throw new Error('no GitHub'); }};
+const noGitHub = async (): Promise<never> => { throw new Error('no GitHub in the preview'); };
+const github: GitHub = {exchange: noGitHub, user: noGitHub, gist: noGitHub, userById: noGitHub};
 const apiServer = createServer(createApi(pgStore(app, app), config)).listen(0, '127.0.0.1');
 const authServer = createServer(createAuth(pgAuthStore(auth), github, config, {clientId: 'preview', stateSecret: Buffer.from('preview-state-secret-0123456789')})).listen(0, '127.0.0.1');
 await new Promise(r => setTimeout(r, 200));

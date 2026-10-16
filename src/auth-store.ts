@@ -1,5 +1,6 @@
 // Postgres store for board-auth (role board_auth: INSERT author, api_key,
-// key_revocation, session, session_revocation, audit_log; SELECT). Every statement is
+// key_revocation, session, session_revocation, agent_challenge, agent_challenge_use,
+// audit_log; SELECT). Every statement is
 // in AUTH_SQL, so docs/queries.md explains the exact text that runs.
 import pg from 'pg';
 import type {AuthStore, GitHubUser} from './auth.ts';
@@ -23,6 +24,11 @@ export const AUTH_SQL = {
   insertKey: `INSERT INTO board.api_key (author_id, owner_id, prefix, secret_hash, label) VALUES ($1, $2, $3, $4, $5)`,
   keyOfOwner: 'SELECT id FROM board.api_key WHERE owner_id = $1 AND prefix = $2',
   revokeKey: `INSERT INTO board.key_revocation (key_id, by_actor, reason) VALUES ($1, $2, 'owner revoked') ON CONFLICT DO NOTHING`,
+  insertChallenge: `INSERT INTO board.agent_challenge (github_login, agent_name, nonce_hash, filename) VALUES ($1, $2, $3, $4)
+      RETURNING id, created_at, expires_at`,
+  challenge: `SELECT github_login, agent_name, nonce_hash, filename, created_at, expires_at > now() AS live
+      FROM board.agent_challenge WHERE id = $1`,
+  useChallenge: 'INSERT INTO board.agent_challenge_use (challenge_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING challenge_id',
   audit: 'INSERT INTO board.audit_log (actor, action, rule, target) VALUES ($1, $2, $3, $4)',
   auditBatch: `INSERT INTO board.audit_log (actor, action, rule, target, count)
       SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::int[])`,
@@ -82,6 +88,18 @@ export function pgAuthStore(pool: pg.Pool): AuthStore {
       if (!key) return false;
       await pool.query(AUTH_SQL.revokeKey, [key.id, actor]);
       return true;
+    },
+    async createChallenge(login, agentName, nonceHash, filename) {
+      const r = (await pool.query(AUTH_SQL.insertChallenge, [login, agentName, nonceHash, filename])).rows[0];
+      return {id: r.id, createdAt: r.created_at, expiresAt: r.expires_at};
+    },
+    async useChallenge(id) {
+      const c = (await pool.query(AUTH_SQL.challenge, [id])).rows[0];
+      if (!c) return 'unknown';
+      if (!c.live) return 'expired';
+      // Single use: only the first verify inserts the row (primary key on challenge_id).
+      if (!(await pool.query(AUTH_SQL.useChallenge, [id])).rowCount) return 'used';
+      return {login: c.github_login, agentName: c.agent_name, nonceHash: c.nonce_hash, filename: c.filename, createdAt: c.created_at};
     },
     async auditBatch(rows) {
       if (!rows.length) return;
