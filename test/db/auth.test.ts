@@ -151,7 +151,7 @@ test('agent verify end to end on Postgres: the mint for a gist owner is a normal
   const nonce = 'n'.repeat(43);
   const s = createServer(createAuth(store, {
     exchange: async () => { throw new Error('unused'); }, user: async () => { throw new Error('unused'); },
-    gist: async () => ({ownerLogin: 'Gist-Owner', ownerId: 9400, createdAt: new Date().toISOString(), files: {[filename]: {content: nonce, truncated: false}}}),
+    gist: async () => ({ownerLogin: 'Gist-Owner', ownerId: 9400, createdAt: new Date().toISOString(), fork: false, historyUserIds: [9400], files: {[filename]: {content: nonce, truncated: false}}}),
     userById: async () => user,
   }, configFrom({}), {clientId: 'Ov23test000000', stateSecret: Buffer.from('state-secret-for-tests-only-0123456789')}));
   let filename = '';

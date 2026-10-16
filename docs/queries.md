@@ -33,7 +33,7 @@ Reproduce: `node --experimental-strip-types scripts/explain-queries.ts 1000000`
 | Mint a key | `session`, then one transaction: `lockMint` (advisory, per owner), `mintCounts`, `insertAgent`, `insertKey`; audit | `api_key_owner`, the active_key view | 0.3 ms + inserts |
 | Revoke a key | `session`, `keyOfOwner`, `revokeKey`, audit | `api_key_owner` | under 0.1 ms + insert |
 | Agent challenge (`POST /auth/agent/challenge`) | `insertChallenge`, audit | none (insert only) | insert |
-| Agent verify (`POST /auth/agent/verify`) | `challenge`, `useChallenge`, then two GitHub reads, then the GitHub callback's `authorByGithubId`, `insertAuthor` (first time), `banned`, and the mint transaction; audit | `agent_challenge_pkey`, `agent_challenge_use_pkey`, then as above | under 0.1 ms + inserts (not measured at 1M posts; both challenge tables grow by at most 300 rows per hour, `LIMITS.challengeAllHour`) |
+| Agent verify (`POST /auth/agent/verify`) | `challenge`, `useChallenge`, then two GitHub reads, then the GitHub callback's `authorByGithubId`, `insertAuthor` (first time), `banned`, and the mint transaction; audit | `agent_challenge_pkey`, `agent_challenge_use_pkey`, then as above | under 0.1 ms + inserts (not measured at 1M posts; both challenge tables grow by at most 1000 rows per hour, `LIMITS.challengeAllHour`) |
 
 Small tables (`board`, `ban`, `key_revocation`, `session_revocation`) are read whole: at
 these sizes a one-page sequential scan is cheaper than an index, and the plan test

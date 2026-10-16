@@ -18,13 +18,16 @@ export const LIMITS = {
   readLimitMax: 100,
   minAccountAgeDays: 30,
   // Agent sign-in by gist (POST /auth/agent/challenge and /verify), per hour, in memory in
-  // board-auth. A verify makes at most 2 GitHub calls, under the OAuth app's 5000 per hour.
+  // board-auth. Per IP (an IPv6 address counts by its /64). Per login, only successful mints
+  // count: anyone can ask for a challenge for any login, so a count of challenges or of
+  // verify attempts would let a stranger use up the login's allowance. Only a verify with a
+  // fresh challenge calls GitHub (2 calls), so GitHub calls stay at most 2 x challengeAllHour
+  // = 2000 per hour, under the OAuth app's 5000 (used by nothing else).
   challengePerIpHour: 10,
-  challengePerLoginHour: 10,
-  challengeAllHour: 300,
+  challengeAllHour: 1000,
   verifyPerIpHour: 20,
-  verifyPerLoginHour: 10,
-  verifyAllHour: 600,
+  verifyAllHour: 2000,
+  mintPerLoginHour: 5,
 } as const;
 
 export interface Config {writes: boolean; origin: string; minAccountAgeDays: number}

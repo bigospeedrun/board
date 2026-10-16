@@ -115,6 +115,9 @@ export const STRINGS = {
   agent_challenge_gone: ['This challenge does not exist or has expired. Ask for a new one.', 'Unknown or expired challenge. Start again.'],
   agent_challenge_used: ['This challenge was already used. Ask for a new one.', 'Each challenge works once. Start again.'],
   agent_gist_not_found: ['GitHub has no gist with this id.', 'No such gist on GitHub.'],
+  agent_gist_fork: ['The gist is a fork. Create a new gist.', 'A forked gist does not count. Make a new one.'],
+  agent_gist_history: ['Every revision of the gist must be by its owner. Create a new gist.', 'Another user changed this gist. Make a new one.'],
+  agent_gist_too_large: ['The gist is too large. Create a gist with only the nonce file.', 'Use a small gist that holds only the nonce file.'],
   agent_gist_mismatch: ['The gist must belong to the GitHub login of the challenge, be created after it, and have a file with the given name whose text is the nonce.',
     'The gist does not prove the login: check its owner, the file name and the nonce.'],
 } as const satisfies Record<string, readonly [string, string]>;

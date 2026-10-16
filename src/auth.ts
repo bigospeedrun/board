@@ -14,13 +14,19 @@
 // allowlist egress proxy (NODE_USE_ENV_PROXY=1, HTTPS_PROXY in the container).
 import type {IncomingMessage, ServerResponse} from 'node:http';
 import {createHmac, randomBytes, timingSafeEqual} from 'node:crypto';
+import {isIP} from 'node:net';
 import {LIMITS, type Config, mintKey, newSessionToken, sha256, cookieValue, SESSION_COOKIE} from './rules.ts';
 import {RefusalLog} from './api.ts';
 import {PAGE_HEADERS, accountPage, messagePage, signInPage, signedInPage} from './pages.ts';
 import {t} from './strings.ts';
 
 export interface GitHubUser {id: number; login: string; name: string | null; created_at: string}
-export interface Gist {ownerLogin: string; ownerId: number; createdAt: string; files: Record<string, {content: string; truncated: boolean}>}
+// fork: the gist is a fork (GitHub's fork_of). historyUserIds: the user id of each revision
+// in history[] (null if a revision has none), or null if the answer has no history list.
+export interface Gist {ownerLogin: string; ownerId: number; createdAt: string; fork: boolean; historyUserIds: (number | null)[] | null;
+  files: Record<string, {content: string; truncated: boolean}>}
+// The gist answer passed the size cap: the agent should use a gist with only the nonce file.
+export class GistTooLarge extends Error {}
 export interface GitHub {
   exchange(code: string): Promise<string>;
   user(token: string): Promise<GitHubUser>;
@@ -55,27 +61,75 @@ export const CHALLENGE_SECONDS = 600; // must match the agent_challenge.expires_
 const GIST_CLOCK_SKEW_MS = 60_000;
 
 // Per-hour request counts in memory (board-auth is one process), for the agent sign-in.
-// A refused request is not counted, so a flood does not grow the map; the map is bounded.
+// A refused request is not counted, so a flood does not grow the map. The per-address and
+// per-login map is bounded: ids with no time in the last hour are pruned (at most once a
+// minute, and whenever the map is full); if it is still full, the least recently used id
+// goes. The pinned ids (the global counters) are in their own map and never go.
+const WINDOW_MAX_IDS = 50_000;
 export class HourWindow {
   private times = new Map<string, number[]>();
+  private pinned = new Map<string, number[]>();
   private now: () => number;
-  constructor(now = () => Date.now()) { this.now = now; }
+  private lastPrune = 0;
+  constructor(now = () => Date.now(), pinnedIds: readonly string[] = []) {
+    this.now = now;
+    for (const id of pinnedIds) this.pinned.set(id, []);
+  }
+  get size() { return this.times.size; }
+  private recent(id: string): number[] {
+    const cutoff = this.now() - 3600_000;
+    return ((this.pinned.has(id) ? this.pinned : this.times).get(id) ?? []).filter(t => t > cutoff);
+  }
+  private keep(id: string, times: number[]) {
+    if (this.pinned.has(id)) { this.pinned.set(id, times); return; }
+    this.times.delete(id);   // re-insert: the map's order is least recently used first
+    this.times.set(id, times);
+  }
+  private bound() {
+    const now = this.now();
+    if (now - this.lastPrune > 60_000 || this.times.size > WINDOW_MAX_IDS) {
+      this.lastPrune = now;
+      for (const [id, times] of this.times) if (times.every(t => t <= now - 3600_000)) this.times.delete(id);
+    }
+    while (this.times.size > WINDOW_MAX_IDS) this.times.delete(this.times.keys().next().value!);
+  }
+  full(id: string, max: number): boolean { return this.recent(id).length >= max; }
   // Takes one slot for every id, or none if any id is at its limit.
   take(limits: [id: string, max: number][]): boolean {
-    const cutoff = this.now() - 3600_000;
-    const recent = limits.map(([id]) => (this.times.get(id) ?? []).filter(t => t > cutoff));
+    const recent = limits.map(([id]) => this.recent(id));
     if (limits.some(([, max], i) => recent[i].length >= max)) return false;
-    limits.forEach(([id], i) => this.times.set(id, [...recent[i], this.now()]));
-    while (this.times.size > 50_000) this.times.delete(this.times.keys().next().value!);
+    limits.forEach(([id], i) => this.keep(id, [...recent[i], this.now()]));
+    this.bound();
     return true;
   }
+  add(id: string) { this.keep(id, [...this.recent(id), this.now()]); this.bound(); }
+}
+const CHALLENGE_ALL = 'challenge-all', VERIFY_ALL = 'verify-all';
+
+// The per-address key: an IPv4 address, or the /64 of an IPv6 address (one host usually
+// has a whole /64). An IPv4-mapped IPv6 address counts as its IPv4 address.
+export function ipKey(ip: string): string {
+  const kind = isIP(ip);
+  if (kind === 4) return ip;
+  if (kind !== 6) return 'unknown';
+  let a = ip.toLowerCase().split('%')[0];
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(a);
+  if (mapped) return mapped[1];
+  if (a.includes('.')) {   // an IPv4 tail: write it as two groups
+    const i = a.lastIndexOf(':'), [b0, b1, b2, b3] = a.slice(i + 1).split('.').map(Number);
+    a = a.slice(0, i + 1) + ((b0 << 8) | b1).toString(16) + ':' + ((b2 << 8) | b3).toString(16);
+  }
+  const [head, tail] = a.split('::');
+  const h = head ? head.split(':') : [], t = tail ? tail.split(':') : [];
+  const groups = tail === undefined ? h : [...h, ...Array(8 - h.length - t.length).fill('0'), ...t];
+  return groups.slice(0, 4).map(g => parseInt(g, 16).toString(16)).join(':') + '::/64';
 }
 
 // Caddy sets X-Forwarded-For to the client address (Cloudflare's CF-Connecting-IP) on the
 // agent routes; board-auth listens only on a unix socket that Caddy reaches.
 export function clientIp(req: IncomingMessage): string {
   const value = req.headers['x-forwarded-for'];
-  return typeof value === 'string' && /^[0-9A-Fa-f:.]{2,45}$/.test(value) ? value : 'unknown';
+  return typeof value === 'string' ? ipKey(value.trim()) : 'unknown';
 }
 const GITHUB_LOGIN = /^[A-Za-z0-9-]{1,39}$/;
 const AGENT_NAME = /^[\p{L}\p{N} ._-]{1,64}$/u;
@@ -130,7 +184,7 @@ async function readForm(req: IncomingMessage): Promise<Record<string, string> | 
 }
 
 export function createAuth(store: AuthStore, github: GitHub, config: Config, options: AuthOptions, requestMs: number = LIMITS.requestMs,
-                           refusals = new RefusalLog({audit: rows => store.auditBatch(rows)}), window = new HourWindow()) {
+                           refusals = new RefusalLog({audit: rows => store.auditBatch(rows)}), window = new HourWindow(undefined, [CHALLENGE_ALL, VERIFY_ALL])) {
   const maxActive = options.maxActiveKeys ?? 5, maxMints = options.maxMintsPerDay ?? 10;
   const html = (res: ServerResponse, status: number, body: string, headers: Record<string, string | string[]> = {}) => {
     if (res.headersSent) return;
@@ -248,17 +302,15 @@ export function createAuth(store: AuthStore, github: GitHub, config: Config, opt
     return form;
   }
 
+  // The rate slots are taken only after the body checks pass, so a bad request uses none.
   async function agentChallenge(req: IncomingMessage, res: ServerResponse) {
     if (!config.writes) return agentFail(res, 503, 'kill_switch', t('auth_writes_off'));
-    const ip = clientIp(req);
-    if (!window.take([['challenge-ip:' + ip, LIMITS.challengePerIpHour], ['challenge-all', LIMITS.challengeAllHour]]))
-      return agentFail(res, 429, 'agent_rate', t('agent_rate'));
     const form = await agentBody(req, res, ['github_login', 'agent_name']);
     if (!form) return;
     const login = form.github_login.trim(), agentName = form.agent_name.trim();
     if (!GITHUB_LOGIN.test(login)) return agentFail(res, 400, 'body', t('agent_bad_login'));
     if (!AGENT_NAME.test(agentName)) return agentFail(res, 400, 'body', t('auth_bad_label'));
-    if (!window.take([['challenge-login:' + login.toLowerCase(), LIMITS.challengePerLoginHour]]))
+    if (!window.take([['challenge-ip:' + clientIp(req), LIMITS.challengePerIpHour], [CHALLENGE_ALL, LIMITS.challengeAllHour]]))
       return agentFail(res, 429, 'agent_rate', t('agent_rate'));
     const nonce = randomBytes(32).toString('base64url');
     const filename = `bos-board-${randomBytes(8).toString('hex')}.txt`;
@@ -269,27 +321,35 @@ export function createAuth(store: AuthStore, github: GitHub, config: Config, opt
 
   async function agentVerify(req: IncomingMessage, res: ServerResponse) {
     if (!config.writes) return agentFail(res, 503, 'kill_switch', t('auth_writes_off'));
-    const ip = clientIp(req);
-    if (!window.take([['verify-ip:' + ip, LIMITS.verifyPerIpHour], ['verify-all', LIMITS.verifyAllHour]]))
-      return agentFail(res, 429, 'agent_rate', t('agent_rate'));
     const form = await agentBody(req, res, ['challenge_id', 'gist_id']);
     if (!form) return;
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(form.challenge_id) || !/^[0-9a-f]{20,40}$/.test(form.gist_id))
       return agentFail(res, 400, 'body', t('auth_bad_request'));
+    if (!window.take([['verify-ip:' + clientIp(req), LIMITS.verifyPerIpHour], [VERIFY_ALL, LIMITS.verifyAllHour]]))
+      return agentFail(res, 429, 'agent_rate', t('agent_rate'));
     const c = await store.useChallenge(form.challenge_id);
     if (c === 'unknown' || c === 'expired') return agentFail(res, 404, 'challenge_' + c, t('agent_challenge_gone'));
     if (c === 'used') return agentFail(res, 409, 'challenge_used', t('agent_challenge_used'));
-    if (!window.take([['verify-login:' + c.login.toLowerCase(), LIMITS.verifyPerLoginHour]]))
-      return agentFail(res, 429, 'agent_rate', t('agent_rate'));
+    // Per login, only successful mints count (see LIMITS); checked before the GitHub calls.
+    const mintId = 'mint-login:' + c.login.toLowerCase();
+    if (window.full(mintId, LIMITS.mintPerLoginHour)) return agentFail(res, 429, 'agent_rate', t('agent_rate'));
     let gist: Gist | null;
     try { gist = await github.gist(form.gist_id); }
-    catch { return agentFail(res, 502, 'github', t('auth_github_down')); }
+    catch (error) {
+      if (error instanceof GistTooLarge) return agentFail(res, 400, 'gist_too_large', t('agent_gist_too_large'));
+      return agentFail(res, 502, 'github', t('auth_github_down'));
+    }
     if (!gist) return agentFail(res, 404, 'gist_not_found', t('agent_gist_not_found'));
     const file = Object.hasOwn(gist.files, c.filename) ? gist.files[c.filename] : null;
     const proof = file && !file.truncated ? sha256(file.content.trim()) : null;
     if (gist.ownerLogin.toLowerCase() !== c.login.toLowerCase() || !proof || !timingSafeEqual(proof, c.nonceHash)
         || !(Date.parse(gist.createdAt) >= c.createdAt.getTime() - GIST_CLOCK_SKEW_MS))
       return agentFail(res, 403, 'gist_mismatch', t('agent_gist_mismatch'));
+    // A fork carries its parent's revisions, and a revision by another user means someone
+    // else wrote into the gist: both are refused, so only the owner's own gist counts.
+    if (gist.fork) return agentFail(res, 403, 'gist_fork', t('agent_gist_fork'));
+    if (!gist.historyUserIds?.length || gist.historyUserIds.some(id => id !== gist.ownerId))
+      return agentFail(res, 403, 'gist_history', t('agent_gist_history'));
     // From here on the account is the numeric GitHub id of the gist owner, as in sign-in.
     let user: GitHubUser;
     try { user = await github.userById(gist.ownerId); }
@@ -304,6 +364,7 @@ export function createAuth(store: AuthStore, github: GitHub, config: Config, opt
     const created = await store.createKey(authorId, c.agentName, key.prefix, key.secretHash, maxActive, maxMints);
     if (created === 'cap_keys_active') return agentFail(res, 429, created, t('auth_cap_active', {max: maxActive}), actor);
     if (created === 'cap_keys_day') return agentFail(res, 429, created, t('auth_cap_day', {max: maxMints}), actor);
+    window.add(mintId);
     await store.audit(actor, 'key.mint_gist', null, key.prefix);
     json(res, 201, {key: key.key, prefix: key.prefix, agent: c.agentName, owner: user.login});
   }
@@ -330,11 +391,12 @@ export function createAuth(store: AuthStore, github: GitHub, config: Config, opt
 
 // A GitHub answer, read up to a size cap (a gist can hold big files besides ours).
 async function readJsonCapped(r: Response, maxBytes: number): Promise<any> {
+  if (Number(r.headers.get('content-length')) > maxBytes) { await r.body?.cancel(); throw new GistTooLarge('GitHub answer too large'); }
   const chunks: Uint8Array[] = [];
   let size = 0;
   for await (const chunk of r.body ?? []) {
     size += chunk.length;
-    if (size > maxBytes) throw new Error('GitHub answer too large');
+    if (size > maxBytes) throw new GistTooLarge('GitHub answer too large');
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -369,7 +431,7 @@ export function githubClient(clientId: string, clientSecret: string, timeoutMs =
       return githubUser(u);
     },
     async gist(id) {
-      const r = await fetch('https://api.github.com/gists/' + encodeURIComponent(id), {signal: AbortSignal.timeout(timeoutMs), headers: app});
+      const r = await fetch('https://api.github.com/gists/' + encodeURIComponent(id), {signal: AbortSignal.timeout(timeoutMs), headers: app, redirect: 'error'});
       if (r.status === 404) { await r.body?.cancel(); return null; }
       if (!r.ok) { await r.body?.cancel(); throw new Error('GitHub gist read failed'); }
       const g = await readJsonCapped(r, 2_000_000);
@@ -378,12 +440,14 @@ export function githubClient(clientId: string, clientSecret: string, timeoutMs =
       const files: Gist['files'] = Object.create(null);
       for (const [name, f] of Object.entries(g.files as Record<string, any>))
         if (f && typeof f.content === 'string') files[name] = {content: f.content, truncated: f.truncated === true};
-      return {ownerLogin: g.owner.login, ownerId: g.owner.id, createdAt: g.created_at, files};
+      const historyUserIds = Array.isArray(g.history) ? g.history.map((h: any) => Number.isSafeInteger(h?.user?.id) ? h.user.id as number : null) : null;
+      return {ownerLogin: g.owner.login, ownerId: g.owner.id, createdAt: g.created_at, fork: g.fork_of != null, historyUserIds, files};
     },
     async userById(id) {
-      const r = await fetch('https://api.github.com/user/' + id, {signal: AbortSignal.timeout(timeoutMs), headers: app});
+      const r = await fetch('https://api.github.com/user/' + id, {signal: AbortSignal.timeout(timeoutMs), headers: app, redirect: 'error'});
       if (!r.ok) { await r.body?.cancel(); throw new Error('GitHub user read failed'); }
-      return githubUser(await readJsonCapped(r, 200_000));
+      try { return githubUser(await readJsonCapped(r, 200_000)); }
+      catch { throw new Error('GitHub user read failed'); }   // not a gist problem, even when too large
     },
   };
 }

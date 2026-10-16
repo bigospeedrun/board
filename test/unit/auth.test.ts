@@ -2,7 +2,7 @@
 import {test, after} from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer, request, type Server} from 'node:http';
-import {createAuth, githubClient, signState, stateValid, HourWindow, type AuthStore, type Challenge, type Gist, type GitHub, type GitHubUser, type KeyRow} from '../../src/auth.ts';
+import {createAuth, githubClient, signState, stateValid, HourWindow, ipKey, GistTooLarge, type AuthStore, type Challenge, type Gist, type GitHub, type GitHubUser, type KeyRow} from '../../src/auth.ts';
 import {configFrom, parseKey, newSessionToken, sha256, LIMITS} from '../../src/rules.ts';
 import {RefusalLog} from '../../src/api.ts';
 import {displayName} from '../../src/auth-store.ts';
@@ -62,10 +62,10 @@ function fakes(opts: {banned?: boolean; createdDaysAgo?: number; githubDown?: bo
 
 const servers: Server[] = [];
 after(() => servers.forEach(s => s.close()));
-async function serve(env: Record<string, string> = {}, opts = {}) {
+async function serve(env: Record<string, string> = {}, opts = {}, authOptions: {maxActiveKeys?: number} = {}) {
   const f = fakes(opts);
   const refusals = new RefusalLog({audit: rows => f.store.auditBatch(rows)});
-  const server = createServer(createAuth(f.store, f.github, configFrom({BOARD_ORIGIN: ORIGIN, ...env}), {clientId: 'Iv1.abcdef0123456789', stateSecret: SECRET}, undefined, refusals));
+  const server = createServer(createAuth(f.store, f.github, configFrom({BOARD_ORIGIN: ORIGIN, ...env}), {clientId: 'Iv1.abcdef0123456789', stateSecret: SECRET, ...authOptions}, undefined, refusals));
   servers.push(server);
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
   const port = (server.address() as any).port;
@@ -230,7 +230,7 @@ async function proved(s: Awaited<ReturnType<typeof serve>>, login = 'alice', edi
   const ch = await agentCall(s, 'challenge', {github_login: login, agent_name: 'proof-search'}, ip);
   assert.equal(ch.status, 201, ch.text);
   const gistId = (++gistSeq).toString(16).padStart(32, 'a');
-  const gist: Gist = {ownerLogin: 'Alice', ownerId: 42, createdAt: new Date().toISOString(),
+  const gist: Gist = {ownerLogin: 'Alice', ownerId: 42, createdAt: new Date().toISOString(), fork: false, historyUserIds: [42],
     files: {[ch.json.filename]: {content: ch.json.nonce + '\n', truncated: false}}};   // gh adds a newline
   edit(gist);
   s.gists.set(gistId, gist);
@@ -295,15 +295,27 @@ test('agent verify refusals: the gist must be of that login, after the challenge
     ['older gist', g => { g.createdAt = new Date(Date.now() - 120_000).toISOString(); }, 403, 'gist_mismatch'],
     ['bad date', g => { g.createdAt = 'yesterday'; }, 403, 'gist_mismatch'],
     ['nonce as part of the text', g => { for (const f of Object.values(g.files)) f.content = 'x ' + f.content; }, 403, 'gist_mismatch'],
+    // Worker 4 review: a fork, or a revision by another user, does not prove the login.
+    ['fork', g => { g.fork = true; }, 403, 'gist_fork'],
+    ['a revision by another user', g => { g.historyUserIds = [77, 42]; }, 403, 'gist_history'],
+    ['a revision with no user', g => { g.historyUserIds = [42, null]; }, 403, 'gist_history'],
+    ['no history', g => { g.historyUserIds = null; }, 403, 'gist_history'],
+    ['empty history', g => { g.historyUserIds = []; }, 403, 'gist_history'],
   ];
-  for (const [name, edit, status, rule] of cases) {
-    const r = await (await proved(s, 'alice', edit)).verify();
+  for (const [i, [name, edit, status, rule]] of cases.entries()) {
+    const r = await (await proved(s, 'alice', edit, '198.51.100.' + i)).verify();   // one address per case: the per-address limit is 10
     assert.equal(r.status, status, name); assert.equal(r.json.error.rule, rule, name);
   }
   // Within the clock skew allowance: a gist 30 s "older" than its challenge passes.
   assert.equal((await (await proved(s, 'alice', g => { g.createdAt = new Date(Date.now() - 30_000).toISOString(); })).verify()).status, 201);
   const ch = await agentCall(s, 'challenge', {github_login: 'alice', agent_name: 'x'});
   assert.equal((await agentCall(s, 'verify', {challenge_id: ch.json.challenge_id, gist_id: 'f'.repeat(32)})).json.error.rule, 'gist_not_found');
+  // A gist over the size cap is the agent's to fix, not a GitHub error.
+  const gistRead = s.github.gist;
+  s.github.gist = async () => { throw new GistTooLarge('too large'); };
+  const big = await (await proved(s)).verify();
+  assert.equal(big.status, 400); assert.equal(big.json.error.rule, 'gist_too_large');
+  s.github.gist = gistRead;
   assert.equal((await agentCall(s, 'verify', {challenge_id: '00000000-0000-4000-8000-00000000ffff', gist_id: 'f'.repeat(32)})).json.error.rule, 'challenge_unknown');
   for (const body of [{challenge_id: 'x', gist_id: 'f'.repeat(32)}, {challenge_id: ch.json.challenge_id, gist_id: '../users'}, {challenge_id: ch.json.challenge_id}])
     assert.equal((await agentCall(s, 'verify', body)).status, 400, JSON.stringify(body));
@@ -322,28 +334,58 @@ test('agent verify: account age, ban, key caps and GitHub errors as in the accou
   const down = await serve({}, {githubDown: true});
   const r = await (await proved(down)).verify();
   assert.equal(r.status, 502); assert.equal(r.json.error.rule, 'github');
-  const s = await serve();
-  for (let i = 0; i < 5; i++) assert.equal((await (await proved(s, 'alice', undefined, '198.51.100.' + i)).verify()).status, 201);
+  const s = await serve({}, {}, {maxActiveKeys: 2});
+  for (let i = 0; i < 2; i++) assert.equal((await (await proved(s, 'alice', undefined, '198.51.100.' + i)).verify()).status, 201);
   assert.equal((await (await proved(s, 'alice', undefined, '198.51.100.9')).verify()).json.error.rule, 'cap_keys_active');
   assert.equal(young.keys.length + banned.keys.length + down.keys.length, 0);
 });
 
-test('agent rate limits: per IP and per login, for challenge and verify', async () => {
+test('agent rate limits: per address (IPv6 by /64) after the body checks; per login only successful mints', async () => {
   const s = await serve();
+  // Refused bodies take no slot.
+  for (let i = 0; i < 15; i++) assert.equal((await agentCall(s, 'challenge', {github_login: 'bad login', agent_name: 'x'}, '192.0.2.1')).status, 400);
   for (let i = 0; i < LIMITS.challengePerIpHour; i++)
     assert.equal((await agentCall(s, 'challenge', {github_login: 'user' + i, agent_name: 'x'}, '192.0.2.1')).status, 201);
   const over = await agentCall(s, 'challenge', {github_login: 'fresh', agent_name: 'x'}, '192.0.2.1');
   assert.equal(over.status, 429); assert.equal(over.json.error.rule, 'agent_rate');
   assert.equal((await agentCall(s, 'challenge', {github_login: 'fresh', agent_name: 'x'}, '192.0.2.2')).status, 201);
-  // One login from many addresses (the login is case-insensitive).
-  for (let i = 0; i < LIMITS.challengePerLoginHour; i++)
-    assert.equal((await agentCall(s, 'challenge', {github_login: i % 2 ? 'Bob' : 'bob', agent_name: 'x'}, '198.18.0.' + i)).status, 201);
-  assert.equal((await agentCall(s, 'challenge', {github_login: 'BOB', agent_name: 'x'}, '198.18.1.1')).status, 429);
-  // Verify: per IP (counted before the body is read).
+  // Challenges for one login from many addresses are not limited per login: a stranger
+  // cannot use up the login's allowance.
+  for (let i = 0; i < 12; i++)
+    assert.equal((await agentCall(s, 'challenge', {github_login: 'bob', agent_name: 'x'}, '198.18.0.' + i)).status, 201);
+  // IPv6: one /64 shares one allowance; another /64 has its own.
+  const v6 = await serve();
+  for (let i = 0; i < LIMITS.challengePerIpHour; i++)
+    assert.equal((await agentCall(v6, 'challenge', {github_login: 'u' + i, agent_name: 'x'}, `2001:db8:1:2::${(i + 1).toString(16)}`)).status, 201);
+  assert.equal((await agentCall(v6, 'challenge', {github_login: 'u', agent_name: 'x'}, '2001:db8:1:2:ffff:ffff:ffff:ffff')).status, 429);
+  assert.equal((await agentCall(v6, 'challenge', {github_login: 'u', agent_name: 'x'}, '2001:db8:1:3::1')).status, 201);
+  // Verify: per address, after the body checks.
   const v = await serve();
+  for (let i = 0; i < 25; i++) assert.equal((await agentCall(v, 'verify', {challenge_id: 'x', gist_id: 'f'.repeat(32)}, '192.0.2.50')).status, 400);
   for (let i = 0; i < LIMITS.verifyPerIpHour; i++)
     assert.equal((await agentCall(v, 'verify', {challenge_id: '00000000-0000-4000-8000-00000000ffff', gist_id: 'f'.repeat(32)}, '192.0.2.50')).status, 404);
   assert.equal((await agentCall(v, 'verify', {challenge_id: '00000000-0000-4000-8000-00000000ffff', gist_id: 'f'.repeat(32)}, '192.0.2.50')).status, 429);
+  // Per login: refused verifies do not count; successful mints do (5 per hour).
+  const m = await serve({}, {}, {maxActiveKeys: 100});
+  for (let i = 0; i < 6; i++) assert.equal((await (await proved(m, 'alice', g => { g.fork = true; }, '203.0.113.' + i)).verify()).status, 403);
+  for (let i = 0; i < LIMITS.mintPerLoginHour; i++) assert.equal((await (await proved(m, 'alice', undefined, '203.0.113.' + (10 + i))).verify()).status, 201);
+  let gistCalls = 0;
+  const read = m.github.gist;
+  m.github.gist = async id => { gistCalls++; return read(id); };
+  const capped = await (await proved(m, 'alice', undefined, '203.0.113.99')).verify();
+  assert.equal(capped.status, 429); assert.equal(capped.json.error.rule, 'agent_rate');
+  assert.equal(gistCalls, 0);   // refused before GitHub
+});
+
+test('ipKey: IPv4 as is, IPv6 by its /64, IPv4-mapped as IPv4, anything else unknown', () => {
+  assert.equal(ipKey('203.0.113.7'), '203.0.113.7');
+  assert.equal(ipKey('2001:db8:1:2::1'), '2001:db8:1:2::/64');
+  assert.equal(ipKey('2001:0DB8:0001:0002:ffff:ffff:ffff:ffff'), '2001:db8:1:2::/64');
+  assert.equal(ipKey('2001:db8::1'), '2001:db8:0:0::/64');
+  assert.equal(ipKey('::1'), '0:0:0:0::/64');
+  assert.equal(ipKey('::ffff:192.0.2.1'), '192.0.2.1');
+  assert.equal(ipKey('64:ff9b::192.0.2.1'), '64:ff9b:0:0::/64');
+  for (const bad of ['', 'unknown', '1.2.3.4, 5.6.7.8', '1.2.3', 'x::y']) assert.equal(ipKey(bad), 'unknown', bad);
 });
 
 test('HourWindow: slots free up after an hour; a refused request takes no slot', () => {
@@ -359,25 +401,52 @@ test('HourWindow: slots free up after an hour; a refused request takes no slot',
   assert.ok(w.take([['b', 2], ['all', 3]]));
 });
 
+test('HourWindow: the pinned global counters are never evicted; ids with no recent time are pruned', () => {
+  let now = 0;
+  const w = new HourWindow(() => now, ['all']);
+  assert.ok(w.take([['all', 2]]));
+  assert.ok(w.take([['all', 2]]));
+  // 50 001 other ids fill the bounded map; the global counter stays full.
+  for (let i = 0; i <= 50_000; i++) w.add('ip:' + i);
+  assert.equal(w.size, 50_000);
+  assert.equal(w.take([['all', 2]]), false);
+  assert.ok(w.full('all', 2));
+  // An hour later the old ids are pruned on the next write, not only evicted when full.
+  now = 3600_001 + 60_001;
+  w.add('ip:new');
+  assert.equal(w.size, 1);
+  assert.ok(w.take([['all', 2]]));
+});
+
 test('githubClient: gist and user reads use the app credentials, a 404 is null, big or odd answers fail', async () => {
   const real = globalThis.fetch;
   const seen: {url: string; auth: string | null}[] = [];
   let answer: () => Response = () => new Response('{}');
   globalThis.fetch = (async (url: string, init: RequestInit) => {
     seen.push({url, auth: new Headers(init.headers).get('authorization')});
+    assert.equal(init.redirect, 'error');   // a redirect from GitHub is refused, not followed
     return answer();
   }) as typeof fetch;
   try {
     const gh = githubClient('Ov23clientid0000', 'secret-for-tests-only-000000000000000000');
-    const gist = {owner: {login: 'Alice', id: 42}, created_at: '2026-10-16T10:00:00Z',
+    const gist = {owner: {login: 'Alice', id: 42}, created_at: '2026-10-16T10:00:00Z', history: [{user: {login: 'Alice', id: 42}}, {user: null}],
       files: {'bos-board-0123456789abcdef.txt': {content: 'n\n', truncated: false}, 'big.bin': {truncated: true}}};
     answer = () => new Response(JSON.stringify(gist));
-    assert.deepEqual(await gh.gist('a'.repeat(32)), {ownerLogin: 'Alice', ownerId: 42, createdAt: '2026-10-16T10:00:00Z',
+    assert.deepEqual(await gh.gist('a'.repeat(32)), {ownerLogin: 'Alice', ownerId: 42, createdAt: '2026-10-16T10:00:00Z', fork: false, historyUserIds: [42, null],
       files: Object.assign(Object.create(null), {'bos-board-0123456789abcdef.txt': {content: 'n\n', truncated: false}})});
     assert.equal(seen[0].url, 'https://api.github.com/gists/' + 'a'.repeat(32));
     assert.equal(seen[0].auth, 'Basic ' + Buffer.from('Ov23clientid0000:secret-for-tests-only-000000000000000000').toString('base64'));
+    answer = () => new Response(JSON.stringify({...gist, fork_of: {id: 'parent'}}));
+    assert.equal((await gh.gist('a'.repeat(32)))!.fork, true);
+    answer = () => new Response(JSON.stringify({...gist, history: undefined}));
+    assert.equal((await gh.gist('a'.repeat(32)))!.historyUserIds, null);
     answer = () => new Response('{"message":"Not Found"}', {status: 404});
     assert.equal(await gh.gist('b'.repeat(32)), null);
+    // Too large: by the declared length, or while reading.
+    answer = () => new Response('x'.repeat(2_000_001));
+    await assert.rejects(gh.gist('c'.repeat(32)), GistTooLarge);
+    answer = () => new Response('{}', {headers: {'Content-Length': '9999999'}});
+    await assert.rejects(gh.gist('c'.repeat(32)), GistTooLarge);
     for (const bad of [() => new Response('{}', {status: 403}), () => new Response(JSON.stringify({...gist, owner: null})),
         () => new Response('x'.repeat(2_000_001)), () => new Response('not json')])
       { answer = bad; await assert.rejects(gh.gist('c'.repeat(32))); }
