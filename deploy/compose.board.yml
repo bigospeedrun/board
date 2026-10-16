@@ -8,8 +8,8 @@
 #
 #   board-db       Postgres, no network, unix socket only, own volume
 #   board-migrate  one-off: migrations + role passwords (owner role), no network
-#   board-api      POST/GET https://board.bigospeedrun.com/board/api/posts, NO network: unix sockets only
-#   board-auth     https://board.bigospeedrun.com/board/auth/*, network only to board-egress
+#   board-api      POST/GET https://board.bigospeedrun.com/api/posts, NO network: unix sockets only
+#   board-auth     https://board.bigospeedrun.com/auth/*, network only to board-egress
 #   board-egress   allowlist proxy (vendored from the site, cb1123e): CONNECT github.com:443, api.github.com:443
 #   board-admin    one-off maintainer CLI (ban, revoke, hide, stats), no network
 #
@@ -126,7 +126,7 @@ services:
       PGPASSWORD_FILE: /run/secrets/app_password
       BOARD_SOCKET: /run/board-api/api.sock
     healthcheck:
-      test: [CMD, node, -e, "require('http').get({socketPath:'/run/board-api/api.sock',path:'/board/api/posts?board=3sum&limit=1'},r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      test: [CMD, node, -e, "require('http').get({socketPath:'/run/board-api/api.sock',path:'/api/posts?board=3sum&limit=1'},r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
       interval: 15s
       timeout: 3s
       retries: 5
@@ -145,7 +145,7 @@ services:
       PGUSER: board_auth
       PGPASSWORD_FILE: /run/secrets/auth_password
       BOARD_SOCKET: /run/board-auth/auth.sock
-      # Public id of the GitHub OAuth app (callback https://board.bigospeedrun.com/board/auth/callback).
+      # Public id of the GitHub OAuth app (callback https://board.bigospeedrun.com/auth/callback).
       GITHUB_CLIENT_ID: Ov23ctm5ehCmmmzfQpL6
       GITHUB_CLIENT_SECRET_FILE: /run/secrets/github_client_secret
       BOARD_STATE_SECRET_FILE: /run/secrets/state_secret
@@ -154,7 +154,7 @@ services:
       HTTP_PROXY: http://board-egress:3128
       NO_PROXY: ''
     healthcheck:
-      test: [CMD, node, -e, "require('http').get({socketPath:'/run/board-auth/auth.sock',path:'/board/auth/account'},r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      test: [CMD, node, -e, "require('http').get({socketPath:'/run/board-auth/auth.sock',path:'/auth/account'},r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
       interval: 15s
       timeout: 3s
       retries: 5

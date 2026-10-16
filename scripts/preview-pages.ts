@@ -52,20 +52,18 @@ const github: GitHub = {exchange: async () => { throw new Error('no GitHub in th
 const apiServer = createServer(createApi(pgStore(app, app), config)).listen(0, '127.0.0.1');
 const authServer = createServer(createAuth(pgAuthStore(auth), github, config, {clientId: 'preview', stateSecret: Buffer.from('preview-state-secret-0123456789')})).listen(0, '127.0.0.1');
 await new Promise(r => setTimeout(r, 200));
-const target = (path: string) => (path.startsWith('/board/auth/') ? authServer : apiServer).address() as {port: number};
+const target = (path: string) => (path.startsWith('/auth/') ? authServer : apiServer).address() as {port: number};
 
 // Self-signed certificate for localhost, in a temp dir.
 const dir = mkdtempSync(join(tmpdir(), 'board-preview-'));
 execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', '/CN=localhost', '-keyout', join(dir, 'key.pem'), '-out', join(dir, 'cert.pem')], {stdio: 'ignore'});
 const front = createHttps({key: readFileSync(join(dir, 'key.pem')), cert: readFileSync(join(dir, 'cert.pem'))}, (req, res) => {
   const path = (req.url ?? '/').split('?')[0];
-  if (path === '/') { res.writeHead(302, {Location: '/board/'}); return res.end(); }
-  if (!path.startsWith('/board/')) { res.writeHead(404); return res.end(); }
   const up = request({host: '127.0.0.1', port: target(path).port, method: req.method, path: req.url, headers: req.headers}, r => { res.writeHead(r.statusCode!, r.headers); r.pipe(res); });
   up.on('error', () => { res.writeHead(502); res.end(); });
   req.pipe(up);
 }).listen(port, '127.0.0.1');
-console.log(JSON.stringify({url: origin + '/board/', cookie: {name: '__Host-bos_board_session', value: session.token}, mintedKeyPrefix: key.prefix}));
+console.log(JSON.stringify({url: origin + '/', cookie: {name: '__Host-bos_board_session', value: session.token}, mintedKeyPrefix: key.prefix}));
 
 const stop = () => { db.stop(); process.exit(0); };
 process.on('SIGINT', stop); process.on('SIGTERM', stop);

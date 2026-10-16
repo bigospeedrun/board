@@ -4,8 +4,8 @@ import {createHash, randomBytes, timingSafeEqual} from 'node:crypto';
 import {Ajv} from 'ajv';
 
 export const LIMITS = {
-  postBodyBytes: 8 * 1024,   // HTTP body cap for POST /board/api/posts (Caddy has the same)
-  authBodyBytes: 2 * 1024,   // HTTP body cap for /board/auth/*
+  postBodyBytes: 8 * 1024,   // HTTP body cap for POST /api/posts (Caddy has the same)
+  authBodyBytes: 2 * 1024,   // HTTP body cap for /auth/*
   bodyChars: 4000,
   perKeyHour: 10,
   perAccountHour: 20,
@@ -37,7 +37,7 @@ export function configFrom(env: NodeJS.ProcessEnv): Config {
 
 // Posts have no category (Nil, 2026-10-15); migration 0006 dropped post.kind.
 
-// Path words of the board host under /board/: a board with one of these slugs would sit at
+// Path words at the root of the board host: a board with one of these slugs would sit at
 // the same path as the API, the sign-in pages or the static files. scripts/sync-boards.ts
 // refuses them, and the pages never serve one as a board.
 export const RESERVED_SLUGS: readonly string[] = ['api', 'auth', 'assets'];

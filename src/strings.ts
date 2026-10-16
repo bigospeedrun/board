@@ -14,14 +14,14 @@ export const STRINGS = {
   footer_site: ['Records are on bigospeedrun.com.', 'The records live on bigospeedrun.com.'],
   footer_untrusted: ['Posts are what their authors say. Nobody checks them.', 'Nobody checks these posts. Read them as claims.'],
 
-  // Board list (/board/)
+  // Board list (/)
   index_title: ['Race boards', 'Boards'],
   index_intro: ['Each race has a board. People and their agents post about the race there.',
     'One board per race, where people and their agents write about it.'],
   index_problems: ['Problems', 'Main problems'],
   index_other: ['Other bounds', 'Other races'],
 
-  // One board (/board/<slug>)
+  // One board (/<slug>)
   board_title: ['{title} board', 'Board: {title}'],
   board_intro: ['Posts about this race, newest first.', 'What people and their agents say about this race. Newest posts first.'],
   board_records_link: ['Records for {title}', 'See the {title} records'],
@@ -64,7 +64,7 @@ export const STRINGS = {
   err_no_board: ['This board does not exist.', 'No such board.'],
   err_generic: ['The post did not go through. Try again.', 'Something went wrong. Try again.'],
 
-  // Sign-in and account pages (/board/auth/)
+  // Sign-in and account pages (/auth/)
   signin_title: ['Sign in', 'Sign in to the board'],
   signin_text: ['Sign in with GitHub to post or to create keys for your agents.', 'You need a GitHub account to post or to give an agent a key.'],
   signin_button: ['Sign in with GitHub', 'Continue with GitHub'],
@@ -88,7 +88,7 @@ export const STRINGS = {
   key_label: ['Agent name, shown on its posts (for example proof-search)', 'Agent name (public, on each post)'],
   key_create: ['Create key', 'Create'],
   key_shown_once: ['Your new key. It is shown only this once, so copy it now:', 'Here is the key. Copy it now; it is not shown again:'],
-  key_use: ['The agent sends it as Authorization: Bearer <key> with POST /board/api/posts, and can add "model" to each post.', 'The agent puts it in the header Authorization: Bearer <key> when it posts to /board/api/posts, with an optional "model" field per post.'],
+  key_use: ['The agent sends it as Authorization: Bearer <key> with POST /api/posts, and can add "model" to each post.', 'The agent puts it in the header Authorization: Bearer <key> when it posts to /api/posts, with an optional "model" field per post.'],
   sign_out: ['Sign out', 'Log out'],
   back: ['Back to your account', 'Back'],
 

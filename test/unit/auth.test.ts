@@ -60,9 +60,9 @@ async function serve(env: Record<string, string> = {}, opts = {}) {
     });
   // Sign in through login + callback, return the session cookie.
   const signIn = async () => {
-    const login = await call('GET', '/board/auth/login');
+    const login = await call('GET', '/auth/login');
     const state = /^__Host-bos_board_oauth_state=([^;]+)/.exec(login.headers['set-cookie'][0])![1];
-    const cb = await call('GET', `/board/auth/callback?code=abc&state=${state}`, undefined, {Cookie: `__Host-bos_board_oauth_state=${state}`});
+    const cb = await call('GET', `/auth/callback?code=abc&state=${state}`, undefined, {Cookie: `__Host-bos_board_oauth_state=${state}`});
     return {cb, cookie: /^__Host-bos_board_session=([^;]+)/.exec(cb.headers['set-cookie']?.[0] ?? '')?.[1]};
   };
   const write = (path: string, body: object, cookie: string | undefined, extra: Record<string, string> = {}) =>
@@ -87,29 +87,29 @@ test('state is HMAC-signed and must match the cookie', () => {
 
 test('only the auth routes exist', async () => {
   const s = await serve();
-  for (const [m, p] of [['GET', '/board/auth/admin'], ['POST', '/board/auth/login'], ['GET', '/board/api/posts'], ['DELETE', '/board/auth/keys'], ['GET', '/']])
+  for (const [m, p] of [['GET', '/auth/admin'], ['POST', '/auth/login'], ['GET', '/api/posts'], ['DELETE', '/auth/keys'], ['GET', '/']])
     assert.equal((await s.call(m, p)).status, 404, `${m} ${p}`);
 });
 
 test('login redirects to GitHub with our callback and a state cookie', async () => {
   const s = await serve();
-  const r = await s.call('GET', '/board/auth/login');
+  const r = await s.call('GET', '/auth/login');
   assert.equal(r.status, 302);
   const url = new URL(r.headers.location);
   assert.equal(url.origin + url.pathname, 'https://github.com/login/oauth/authorize');
-  assert.equal(url.searchParams.get('redirect_uri'), ORIGIN + '/board/auth/callback');
+  assert.equal(url.searchParams.get('redirect_uri'), ORIGIN + '/auth/callback');
   assert.match(r.headers['set-cookie'][0], /^__Host-bos_board_oauth_state=[^;]+; Path=\/; Max-Age=600; HttpOnly; SameSite=Lax; Secure$/);
 });
 
 test('callback: forged state 400, GitHub down 502, banned 403, good sign-in sets a strict session cookie', async () => {
   const s = await serve();
-  assert.equal((await s.call('GET', '/board/auth/callback?code=abc&state=x.y', undefined, {Cookie: '__Host-bos_board_oauth_state=x.y'})).status, 400);
-  assert.equal((await s.call('GET', '/board/auth/callback?code=abc')).status, 400);
+  assert.equal((await s.call('GET', '/auth/callback?code=abc&state=x.y', undefined, {Cookie: '__Host-bos_board_oauth_state=x.y'})).status, 400);
+  assert.equal((await s.call('GET', '/auth/callback?code=abc')).status, 400);
   const {cb, cookie} = await s.signIn();
   // A 200 page on our origin that refreshes to the account page: the next request is a
   // same-site navigation, so the SameSite=Strict cookie is sent (a 303 here would not be).
   assert.equal(cb.status, 200); assert.ok(cookie);
-  assert.match(cb.text, /http-equiv="refresh" content="0;url=\/board\/auth\/account"/);
+  assert.match(cb.text, /http-equiv="refresh" content="0;url=\/auth\/account"/);
   // Host-only (no Domain), Path=/ and Secure, as the __Host- prefix requires: no other
   // bigospeedrun.com host can set or overwrite it.
   assert.match(cb.headers['set-cookie'][0], /^__Host-bos_board_session=[A-Za-z0-9_-]{43}; Path=\/; Max-Age=2592000; HttpOnly; SameSite=Strict; Secure$/);
@@ -121,63 +121,63 @@ test('callback: forged state 400, GitHub down 502, banned 403, good sign-in sets
 test('mint and revoke: the key is shown once, revoke works, and the page escapes text', async () => {
   const s = await serve();
   const {cookie} = await s.signIn();
-  const minted = await s.write('/board/auth/keys', {label: ' my agent '}, cookie);
+  const minted = await s.write('/auth/keys', {label: ' my agent '}, cookie);
   assert.equal(minted.status, 201); assert.equal(minted.json.agent, 'my agent');
   assert.equal(s.keys[0].label, 'my agent');
   assert.ok(parseKey('Bearer ' + minted.json.key));
-  const page = await s.call('GET', '/board/auth/account', undefined, {Cookie: `__Host-bos_board_session=${cookie}`});
+  const page = await s.call('GET', '/auth/account', undefined, {Cookie: `__Host-bos_board_session=${cookie}`});
   assert.match(page.text, /Signed in as @alice/); assert.match(page.text, /<strong>my agent<\/strong>, created <time datetime="\d{4}-/);
   assert.match(page.text, /<input id="key-label" name="label" maxlength="64" required>/); assert.doesNotMatch(page.text, /name="model"/); assert.doesNotMatch(page.text, new RegExp(minted.json.key));
   assert.match(page.headers['content-security-policy'], /default-src 'none'/);
-  assert.equal((await s.write('/board/auth/keys/revoke', {prefix: minted.json.prefix}, cookie)).status, 200);
+  assert.equal((await s.write('/auth/keys/revoke', {prefix: minted.json.prefix}, cookie)).status, 200);
   assert.equal(s.keys[0].revoked, true);
-  assert.equal((await s.write('/board/auth/keys/revoke', {prefix: 'aaaaaaaaaaaa'}, cookie)).status, 404);
+  assert.equal((await s.write('/auth/keys/revoke', {prefix: 'aaaaaaaaaaaa'}, cookie)).status, 404);
   assert.deepEqual(s.audits, ['auth.sign_in', 'key.mint', 'key.revoke']); // refusals never write one row each
 });
 
 test('mint refusals: cross origin, no session, young account, caps, kill switch, size, unknown field', async () => {
   const s = await serve();
   const {cookie} = await s.signIn();
-  assert.equal((await s.write('/board/auth/keys', {label: 'x'}, cookie, {Origin: 'https://evil.example'})).status, 403);
+  assert.equal((await s.write('/auth/keys', {label: 'x'}, cookie, {Origin: 'https://evil.example'})).status, 403);
   // The site host is a different origin from the board host now.
-  assert.equal((await s.write('/board/auth/keys', {label: 'x'}, cookie, {Origin: 'https://bigospeedrun.com'})).status, 403);
-  assert.equal((await s.write('/board/auth/keys', {label: 'x'}, 'A'.repeat(43))).status, 401);
-  assert.equal((await s.write('/board/auth/keys', {label: 'x', admin: 'yes'}, cookie)).status, 400);
-  assert.equal((await s.write('/board/auth/keys', {label: '<script>'}, cookie)).status, 400);
-  assert.equal((await s.write('/board/auth/keys', {label: 'x'.repeat(3000)}, cookie)).status, 413);
-  for (let i = 0; i < 5; i++) assert.equal((await s.write('/board/auth/keys', {label: 'k' + i}, cookie)).status, 201);
-  assert.equal((await s.write('/board/auth/keys', {label: 'k6'}, cookie)).json.error.rule, 'cap_keys_active');
+  assert.equal((await s.write('/auth/keys', {label: 'x'}, cookie, {Origin: 'https://bigospeedrun.com'})).status, 403);
+  assert.equal((await s.write('/auth/keys', {label: 'x'}, 'A'.repeat(43))).status, 401);
+  assert.equal((await s.write('/auth/keys', {label: 'x', admin: 'yes'}, cookie)).status, 400);
+  assert.equal((await s.write('/auth/keys', {label: '<script>'}, cookie)).status, 400);
+  assert.equal((await s.write('/auth/keys', {label: 'x'.repeat(3000)}, cookie)).status, 413);
+  for (let i = 0; i < 5; i++) assert.equal((await s.write('/auth/keys', {label: 'k' + i}, cookie)).status, 201);
+  assert.equal((await s.write('/auth/keys', {label: 'k6'}, cookie)).json.error.rule, 'cap_keys_active');
   const young = await serve({}, {createdDaysAgo: 3});
-  assert.equal((await young.write('/board/auth/keys', {label: 'x'}, (await young.signIn()).cookie)).json.error.rule, 'account_too_new');
+  assert.equal((await young.write('/auth/keys', {label: 'x'}, (await young.signIn()).cookie)).json.error.rule, 'account_too_new');
   // With writes off sign-in refuses, so make the session directly in the fake store.
   const off = await serve({BOARD_WRITES: 'off'});
   const session = newSessionToken();
   await off.store.createSession('a1', session.tokenHash);
-  assert.equal((await off.write('/board/auth/keys', {label: 'x'}, session.token)).status, 503);
+  assert.equal((await off.write('/auth/keys', {label: 'x'}, session.token)).status, 503);
 });
 
 test('sign out ends the session', async () => {
   const s = await serve();
   const {cookie} = await s.signIn();
-  assert.equal((await s.write('/board/auth/logout', {}, cookie)).status, 303);
-  assert.equal((await s.write('/board/auth/keys', {label: 'x'}, cookie)).status, 401);
+  assert.equal((await s.write('/auth/logout', {}, cookie)).status, 303);
+  assert.equal((await s.write('/auth/keys', {label: 'x'}, cookie)).status, 401);
 });
 
 test('a key has only its agent name: a model field at mint is refused like any unknown field', async () => {
   const s = await serve();
   const {cookie} = await s.signIn();
-  const r = await s.write('/board/auth/keys', {label: 'k', model: 'Claude Opus 5.5'}, cookie);
+  const r = await s.write('/auth/keys', {label: 'k', model: 'Claude Opus 5.5'}, cookie);
   assert.equal(r.status, 400); assert.equal(r.json.error.rule, 'body');
   assert.equal(s.keys.length, 0);
   // The account form posts the agent name as a form, too.
-  const form = await s.call('POST', '/board/auth/keys', 'label=proof-search',
+  const form = await s.call('POST', '/auth/keys', 'label=proof-search',
     {'Content-Type': 'application/x-www-form-urlencoded', Origin: ORIGIN, Cookie: `__Host-bos_board_session=${cookie}`});
   assert.equal(form.status, 200); assert.equal(s.keys[0].label, 'proof-search');
 });
 
 test('review fixes: refusals are batched, never one audit row per request', async () => {
   const s = await serve();
-  for (let i = 0; i < 5; i++) await s.call('GET', '/board/auth/callback?code=abc&state=x.1.y', undefined, {Cookie: '__Host-bos_board_oauth_state=x.1.y'});
+  for (let i = 0; i < 5; i++) await s.call('GET', '/auth/callback?code=abc&state=x.1.y', undefined, {Cookie: '__Host-bos_board_oauth_state=x.1.y'});
   assert.equal(s.batches.length, 0);
   await s.refusals.flush();
   assert.deepEqual(s.batches.flat().map(r => [r.action, r.rule, r.count]), [['auth.refuse', 'oauth_state', 5]]);

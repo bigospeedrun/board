@@ -1,15 +1,17 @@
-# Race board routes for the board's own host (phase E; not deployed). The board is not
-# under the site host. On the VPS this file is /etc/wg-caddy/board-routes.caddy, and the
-# site block deploy/board.site.caddy (/etc/wg-caddy/board.caddy) imports it:
+# Race board routes for the board's own host (phase E). The board is not under the site
+# host; it sits at the root of board.bigospeedrun.com. On the VPS this file is
+# /etc/wg-caddy/board-routes.caddy, and the site block deploy/board.site.caddy
+# (/etc/wg-caddy/board.caddy) imports it:
 #
 #   board.bigospeedrun.com {
 #   	...
 #   	import /etc/wg-caddy/board-routes.caddy
 #   }
 #
-# Only the three public endpoints and the read-only pages pass (GET/HEAD /board/,
-# /board/<slug>, /board/assets/*, all from board-api); every other path and method on this
-# host is 404. / sends people to the board list.
+# Only the three public endpoints and the read-only pages pass (GET/HEAD /, /<slug>,
+# /assets/*, all from board-api); every other path and method on this host is 404.
+# The slugs api, auth and assets are reserved (src/rules.ts RESERVED_SLUGS), so a board
+# never sits at the path of an endpoint.
 # The Cloudflare gate (the cloudflare_only snippet of the shared Caddy: abort every peer
 # outside the Cloudflare ranges) is the first step of this file's route block. It must be
 # in the route: in a site block, Caddy runs abort after handle, so a top-level
@@ -21,75 +23,64 @@ route {
 	# First: every route below is for Cloudflare peers only.
 	import cloudflare_only
 
-	handle /board/* {
-		@post_api {
-			method POST
-			path /board/api/posts
-			header Content-Type application/json*
+	@post_api {
+		method POST
+		path /api/posts
+		header Content-Type application/json*
+	}
+	handle @post_api {
+		request_body {
+			max_size 8KiB
 		}
-		handle @post_api {
-			request_body {
-				max_size 8KiB
-			}
-			reverse_proxy unix//run/bigospeedrun-board/api/api.sock {
-				header_up X-Forwarded-For {client_ip}
-			}
-		}
-
-		@read_api {
-			method GET HEAD
-			path /board/api/posts
-		}
-		handle @read_api {
-			reverse_proxy unix//run/bigospeedrun-board/api/api.sock
-		}
-
-		@pages {
-			method GET HEAD
-			path /board/ /board/assets/*
-		}
-		handle @pages {
-			reverse_proxy unix//run/bigospeedrun-board/api/api.sock
-		}
-
-		@board_page {
-			method GET HEAD
-			path_regexp ^/board/[a-z0-9][a-z0-9-]{0,62}$
-		}
-		handle @board_page {
-			reverse_proxy unix//run/bigospeedrun-board/api/api.sock
-		}
-
-		@auth_get {
-			method GET
-			path /board/auth/login /board/auth/callback /board/auth/account /board/auth/
-		}
-		handle @auth_get {
-			reverse_proxy unix//run/bigospeedrun-board/auth/auth.sock
-		}
-
-		@auth_post {
-			method POST
-			path /board/auth/keys /board/auth/keys/revoke /board/auth/logout
-		}
-		handle @auth_post {
-			request_body {
-				max_size 2KiB
-			}
-			reverse_proxy unix//run/bigospeedrun-board/auth/auth.sock
-		}
-
-		handle {
-			respond 404
+		reverse_proxy unix//run/bigospeedrun-board/api/api.sock {
+			header_up X-Forwarded-For {client_ip}
 		}
 	}
 
-	# The host's root: the board list.
-	handle / {
-		redir * /board/ 302
+	@read_api {
+		method GET HEAD
+		path /api/posts
+	}
+	handle @read_api {
+		reverse_proxy unix//run/bigospeedrun-board/api/api.sock
 	}
 
-	# Everything else outside /board/ on this host.
+	@pages {
+		method GET HEAD
+		path / /assets/*
+	}
+	handle @pages {
+		reverse_proxy unix//run/bigospeedrun-board/api/api.sock
+	}
+
+	@board_page {
+		method GET HEAD
+		path_regexp ^/[a-z0-9][a-z0-9-]{0,62}$
+	}
+	handle @board_page {
+		reverse_proxy unix//run/bigospeedrun-board/api/api.sock
+	}
+
+	@auth_get {
+		method GET
+		path /auth/login /auth/callback /auth/account /auth/
+	}
+	handle @auth_get {
+		reverse_proxy unix//run/bigospeedrun-board/auth/auth.sock
+	}
+
+	@auth_post {
+		method POST
+		path /auth/keys /auth/keys/revoke /auth/logout
+	}
+	handle @auth_post {
+		request_body {
+			max_size 2KiB
+		}
+		reverse_proxy unix//run/bigospeedrun-board/auth/auth.sock
+	}
+
+	# Everything else on this host.
 	handle {
 		respond 404
 	}

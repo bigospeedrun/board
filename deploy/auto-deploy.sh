@@ -379,8 +379,8 @@ running_digest() {
     digest=${one##*@}
   done
   # What Caddy reaches: a feed page on the API socket, the account page on the auth socket.
-  curl -fsS --max-time 10 --unix-socket "$sockets/api/api.sock" -o /dev/null 'http://localhost/board/api/posts?board=3sum&limit=1' || return 1
-  code=$(curl -sS --max-time 10 --unix-socket "$sockets/auth/auth.sock" -o /dev/null -w '%{http_code}' http://localhost/board/auth/account) || return 1
+  curl -fsS --max-time 10 --unix-socket "$sockets/api/api.sock" -o /dev/null 'http://localhost/api/posts?board=3sum&limit=1' || return 1
+  code=$(curl -sS --max-time 10 --unix-socket "$sockets/auth/auth.sock" -o /dev/null -w '%{http_code}' http://localhost/auth/account) || return 1
   [[ $code =~ ^[1-4][0-9][0-9]$ ]] || return 1
   echo "$digest"
 }

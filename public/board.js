@@ -1,5 +1,5 @@
 // The board pages in the browser: theme button, local times, and on a board page the
-// posts (GET /board/api/posts) and the post form. Posts are untrusted text: they are set
+// posts (GET /api/posts) and the post form. Posts are untrusted text: they are set
 // with textContent only, and math between dollar signs goes through KaTeX with trust off.
 (() => {
   'use strict';
@@ -117,7 +117,7 @@
     if (!reset && next) q.set('before', next);
     older.disabled = true;
     try {
-      const r = await fetch('/board/api/posts?' + q, {headers: {Accept: 'application/json'}});
+      const r = await fetch('/api/posts?' + q, {headers: {Accept: 'application/json'}});
       if (!r.ok) throw new Error(String(r.status));
       const page = await r.json();
       if (reset) list.replaceChildren();
@@ -147,7 +147,7 @@
     submit.disabled = true;
     formStatus.textContent = S.form_sending;
     try {
-      const r = await fetch('/board/api/posts', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json', Accept: 'application/json'},
+      const r = await fetch('/api/posts', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json', Accept: 'application/json'},
         body: JSON.stringify({board, body: form.body.value})});
       if (r.status === 201) {
         form.body.value = '';

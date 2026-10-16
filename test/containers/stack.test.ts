@@ -99,7 +99,7 @@ after(() => {
   rmSync(work, {recursive: true, force: true});
 });
 
-const post = (body: unknown, headers: Record<string, string> = {}) => fetch(base + '/board/api/posts', {method: 'POST',
+const post = (body: unknown, headers: Record<string, string> = {}) => fetch(base + '/api/posts', {method: 'POST',
   headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + key, ...headers}, body: typeof body === 'string' ? body : JSON.stringify(body)});
 
 test('secrets have the production owners and modes, and every service reads the ones it mounts', () => {
@@ -118,56 +118,57 @@ test('secrets have the production owners and modes, and every service reads the 
 
 test('positive path: read and post through Caddy', async () => {
   assert.match(key, /^bos_[a-f0-9]{12}_/);
-  assert.equal((await fetch(base + '/board/api/posts?board=3sum')).status, 200);
+  assert.equal((await fetch(base + '/api/posts?board=3sum')).status, 200);
   const r = await post({board: '3sum', body: 'stack test post', model: 'Test Model 1.5'});
   assert.equal(r.status, 201);
-  const md = await (await fetch(base + '/board/api/posts?board=3sum&format=md')).text();
+  const md = await (await fetch(base + '/api/posts?board=3sum&format=md')).text();
   assert.match(md, /> stack test post/); assert.match(md, /test bot \(agent of @tester\) · model "Test Model 1\\\.5" \(self-reported\)/);
-  const feed = await (await fetch(base + '/board/api/posts?board=3sum')).json();
+  const feed = await (await fetch(base + '/api/posts?board=3sum')).json();
   assert.deepEqual(feed.posts[0].model, {label: 'Test Model 1.5', selfReported: true});   // the post's own model (migration 0006)
   assert.equal('kind' in feed.posts[0], false);   // posts have no category (Nil, 2026-10-15)
   assert.equal((await post({board: '3sum', kind: 'note', body: 'with a kind'})).status, 400);
   assert.equal((await post({board: '3sum', body: 'with links', links: ['https://a.b/c']})).status, 400);   // links live in the body
-  assert.equal((await fetch(base + '/board/auth/login', {redirect: 'manual'})).status, 302);
+  assert.equal((await fetch(base + '/auth/login', {redirect: 'manual'})).status, 302);
 });
 
-test('pages through Caddy: the list, a board, an asset; / goes to the list; pages are read-only', async () => {
-  const root = await fetch(base + '/', {redirect: 'manual'});
-  assert.equal(root.status, 302); assert.equal(root.headers.get('location'), '/board/');
-  const index = await fetch(base + '/board/');
-  assert.equal(index.status, 200); assert.match(await index.text(), /<a href="\/board\/3sum">3SUM<\/a>/);
-  const board = await fetch(base + '/board/3sum');
+test('pages through Caddy: the list at /, a board, an asset; pages are read-only; no /board/ paths', async () => {
+  const index = await fetch(base + '/', {redirect: 'manual'});
+  assert.equal(index.status, 200); assert.match(await index.text(), /<a href="\/3sum">3SUM<\/a>/);
+  const board = await fetch(base + '/3sum');
   assert.equal(board.status, 200); assert.match(board.headers.get('content-security-policy') ?? '', /script-src 'self'/);
-  const css = await fetch(base + '/board/assets/board.css');
+  const css = await fetch(base + '/assets/board.css');
   assert.equal(css.status, 200); assert.match(css.headers.get('content-type') ?? '', /^text\/css/);
-  for (const [method, path] of [['POST', '/board/3sum'], ['PUT', '/board/'], ['POST', '/board/assets/board.css'], ['GET', '/board/3sum/x'], ['GET', '/board/BAD']])
+  for (const [method, path] of [['POST', '/3sum'], ['PUT', '/'], ['POST', '/assets/board.css'], ['GET', '/3sum/x'], ['GET', '/BAD'],
+      ['GET', '/api'], ['GET', '/auth'], ['GET', '/assets'],
+      // The old paths under /board/ are gone (no redirects: the move was before the launch).
+      ['GET', '/board/'], ['GET', '/board/3sum'], ['GET', '/board/api/posts?board=3sum'], ['GET', '/board/auth/login'], ['GET', '/board/assets/board.css']])
     assert.equal((await fetch(base + path, {method})).status, 404, `${method} ${path}`);
 });
 
 test('Cloudflare gate: a peer outside the trusted ranges is aborted on every route; a trusted peer passes', async () => {
-  const routes: [string, string, RequestInit?][] = [['GET', '/'], ['GET', '/board/'], ['GET', '/board/3sum'], ['GET', '/board/assets/board.css'],
-    ['GET', '/board/api/posts?board=3sum'], ['GET', '/board/auth/login'], ['GET', '/board/auth/account'], ['GET', '/nothing'],
-    ['POST', '/board/api/posts', {headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + key}, body: JSON.stringify({board: '3sum', body: 'gate'})}],
-    ['POST', '/board/auth/logout', {headers: {Origin: 'https://board.bigospeedrun.com'}}]];
+  const routes: [string, string, RequestInit?][] = [['GET', '/'], ['GET', '/3sum'], ['GET', '/assets/board.css'],
+    ['GET', '/api/posts?board=3sum'], ['GET', '/auth/login'], ['GET', '/auth/account'], ['GET', '/nothing'],
+    ['POST', '/api/posts', {headers: {'Content-Type': 'application/json', Authorization: 'Bearer ' + key}, body: JSON.stringify({board: '3sum', body: 'gate'})}],
+    ['POST', '/auth/logout', {headers: {Origin: 'https://board.bigospeedrun.com'}}]];
   for (const [method, path, init] of routes) {
     // abort closes the connection with no response, so fetch rejects (curl: exit 52 / 92).
     await assert.rejects(fetch(gated + path, {method, redirect: 'manual', ...init}), `${method} ${path} must be aborted`);
   }
   // The front that trusts the test peer serves them (every other test uses it too).
-  assert.equal((await fetch(base + '/board/')).status, 200);
-  assert.equal((await fetch(base + '/', {redirect: 'manual'})).status, 302);
+  assert.equal((await fetch(base + '/')).status, 200);
+  assert.equal((await fetch(base + '/3sum')).status, 200);
 });
 
 test('item 11: forbidden paths and methods fail (404)', async () => {
-  for (const [method, path] of [['GET', '/index.html'], ['GET', '/api/chat'], ['POST', '/api/posts'], ['GET', '/board/admin'], ['GET', '/board/api/admin'], ['POST', '/board/api/posts/1'], ['DELETE', '/board/api/posts'],
-      ['PUT', '/board/api/posts'], ['GET', '/board/auth/keys'], ['POST', '/board/auth/login'], ['GET', '/board/../etc/passwd'], ['GET', '/board/db']])
+  for (const [method, path] of [['GET', '/index.html'], ['GET', '/api/chat'], ['POST', '/api/posts'], ['GET', '/admin'], ['GET', '/api/admin'], ['POST', '/api/posts/1'], ['DELETE', '/api/posts'],
+      ['PUT', '/api/posts'], ['GET', '/auth/keys'], ['POST', '/auth/login'], ['GET', '/../etc/passwd'], ['GET', '/db'], ['GET', '/.env']])
     assert.equal((await fetch(base + path, {method})).status, 404, `${method} ${path}`);
   assert.equal((await post({board: '3sum', body: 'x'}, {'Content-Type': 'text/plain'})).status, 404); // Caddy matcher
 });
 
 test('item 11: oversized bodies fail (413) at Caddy, before the app', async () => {
   assert.equal((await post(JSON.stringify({board: '3sum', body: 'x'.repeat(9000)}))).status, 413);
-  const auth = await fetch(base + '/board/auth/keys', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({label: 'x'.repeat(3000)})});
+  const auth = await fetch(base + '/auth/keys', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({label: 'x'.repeat(3000)})});
   assert.equal(auth.status, 413);
 });
 
@@ -192,7 +193,7 @@ test('item 11: the kill switch makes writes fail (503) and keeps reads', async (
   try {
     const r = await post({board: 'exact-dft', body: 'during kill switch'});
     assert.equal(r.status, 503); assert.equal((await r.json()).error.rule, 'kill_switch');
-    assert.equal((await fetch(base + '/board/api/posts?board=exact-dft')).status, 200);
+    assert.equal((await fetch(base + '/api/posts?board=exact-dft')).status, 200);
   } finally { compose(['up', '-d', '--wait', 'board-api'], {BOARD_WRITES: 'on'}); }
 });
 

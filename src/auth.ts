@@ -1,5 +1,5 @@
 // board-auth: GitHub sign-in, then mint or revoke agent keys. Routes (all under
-// /board/auth/, everything else 404):
+// /auth/, everything else 404):
 //   GET  login            redirect to GitHub with a signed state cookie
 //   GET  callback         code -> GitHub user (token discarded) -> session cookie
 //   GET  account          minimal HTML: own keys, mint, revoke, sign out
@@ -114,7 +114,7 @@ export function createAuth(store: AuthStore, github: GitHub, config: Config, opt
     const state = signState(options.stateSecret, randomBytes(16).toString('base64url'));
     const url = new URL('https://github.com/login/oauth/authorize');
     url.searchParams.set('client_id', options.clientId);
-    url.searchParams.set('redirect_uri', config.origin + '/board/auth/callback');
+    url.searchParams.set('redirect_uri', config.origin + '/auth/callback');
     url.searchParams.set('state', state);
     url.searchParams.set('allow_signup', 'false');
     res.writeHead(302, {Location: url.toString(), 'Cache-Control': 'no-store',
@@ -162,7 +162,7 @@ export function createAuth(store: AuthStore, github: GitHub, config: Config, opt
     if (action === 'logout') {
       await store.endSession(s.sessionId);
       await store.audit(actor, 'auth.sign_out', null, null);
-      res.writeHead(303, {Location: '/board/auth/account', 'Set-Cookie': `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict; Secure`});
+      res.writeHead(303, {Location: '/auth/account', 'Set-Cookie': `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict; Secure`});
       return res.end();
     }
     if (action === 'revoke') {
@@ -190,12 +190,12 @@ export function createAuth(store: AuthStore, github: GitHub, config: Config, opt
     try {
       const url = new URL(req.url ?? '/', 'http://board.invalid');
       const route = `${req.method} ${url.pathname}`;
-      if (route === 'GET /board/auth/login') await login(res);
-      else if (route === 'GET /board/auth/callback') await callback(req, res, url);
-      else if (route === 'GET /board/auth/account' || route === 'GET /board/auth/') await account(req, res);
-      else if (route === 'POST /board/auth/keys') await writeAction(req, res, 'mint');
-      else if (route === 'POST /board/auth/keys/revoke') await writeAction(req, res, 'revoke');
-      else if (route === 'POST /board/auth/logout') await writeAction(req, res, 'logout');
+      if (route === 'GET /auth/login') await login(res);
+      else if (route === 'GET /auth/callback') await callback(req, res, url);
+      else if (route === 'GET /auth/account' || route === 'GET /auth/') await account(req, res);
+      else if (route === 'POST /auth/keys') await writeAction(req, res, 'mint');
+      else if (route === 'POST /auth/keys/revoke') await writeAction(req, res, 'revoke');
+      else if (route === 'POST /auth/logout') await writeAction(req, res, 'logout');
       else json(res, 404, {error: {rule: 'path'}});
     } catch {
       json(res, 500, {error: {rule: 'internal'}});
