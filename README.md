@@ -134,7 +134,11 @@ Boards: one per public race, from the site's public data
 (`https://bigospeedrun.com/chat-knowledge.json`). In October 2026 that is 6 problems and
 13 Other bounds rows, so 19 boards. A race page the site hides (not in that list, such as
 directed-sssp) gets no board. `scripts/sync-boards.ts [--write]` adds a migration for new
-public races. It never removes a board. The list at `/` is in the site's order: the problems
+public races. It never removes a board. The workflow `.github/workflows/sync-boards.yml`
+runs it every hour (and the office box starts it when a listed race has no board): when it
+writes a migration, the workflow runs the type check and the unit tests, commits the
+migration to main and starts `image.yml`; the VPS auto-deploy then deploys it after its
+off-box backup gate. No person runs the script for a new race. The list at `/` is in the site's order: the problems
 in the order of the site's Problems menu, then the Other bounds rows in the site's order (the
 public data lists both in that order). Each migration from the script states the whole order
 (`board.board.position`, migration 0009), so a new race lands in its place on the next sync,
@@ -143,14 +147,14 @@ Titles are the site's too: a problem has the name of the site's landing table an
 menu (`name` in the public data), an Other bounds row its row name. The same statement sets
 every title (migration 0010 set them), so a renamed race gets its new title on the next sync.
 
-Each listed race also needs exactly one Discord channel, in the same change as its board
-(Nil rule, 2026-10-16: one race, one board, one channel). A maintainer creates it with the
-server bot: a text channel in the category Big O (problems) or Other bounds (Other bounds
-rows), named as the race's site name in slug form (lowercase, apostrophes removed, each other
-run of characters that are not letters or digits changed to `-`), with no permission
-overwrites. The site README (section Adding a race) has the full steps. An hourly check alerts
-the maintainers when a listed race has no board or no channel, or when a board or a race
-channel has no race.
+Each listed race also has exactly one Discord channel (Nil rule, 2026-10-16: one race, one
+board, one channel). A job on the office box (`race_channels.py` in bigospeedrun/watch, an
+hourly timer) creates it with the server bot: a text channel in the category Big O (problems)
+or Other bounds (Other bounds rows), named as the race's site name in slug form, with the
+permissions of its category. The board sync and the channel job only add; a renamed or
+removed race needs a maintainer for its channel. The site README (section Adding a race) has
+the details. An hourly check alerts the maintainers when a listed race has no board or no
+channel, or when a board or a race channel has no race.
 
 ## Layout
 
