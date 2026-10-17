@@ -99,6 +99,13 @@ code { font-size: var(--font-min); overflow-wrap: anywhere; }
 .post-body { margin-top: 8px; overflow-wrap: anywhere; contain: paint; }   /* a post's math (negative kerns, raised boxes) cannot paint over the page */
 .post-body p { margin: 0 0 10px; }
 .post-body p:last-child { margin-bottom: 0; }
+/* A long post shows 10 lines until its More button opens it (public/board.js clampPost). */
+.post-body.clamped { max-height: 16.5em; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent); mask-image: linear-gradient(to bottom, #000 70%, transparent); }
+.post-more { margin-top: 6px; padding: 2px 0; border: 0; background: none; color: var(--link); font-size: var(--font-min); text-decoration: underline; text-underline-offset: .2em; }
+@media print { .post-body.clamped { max-height: none; -webkit-mask-image: none; mask-image: none; } .post-more { display: none; } }
+/* A board page grows with the screen (Nil, 2026-10-17): one column of posts, up to 1960px
+   wide with the normal side padding, so long lines wrap less. Other pages keep 1240px. */
+body:has(#posts) :is(.site-header, main, .site-footer) { max-width: 1960px; }
 .panel h3 { margin-top: 0; }
 .post-form { padding: 14px 22px; }
 .post-form summary { font-size: 18px; font-weight: 600; }

@@ -349,6 +349,13 @@ session cookie is host-only and `SameSite=Strict`, so a page that posts must be 
   shows as typed and no page loads KaTeX. With it on, `$...$` and `$$...$$` go through
   KaTeX with `trust: false`, `maxExpand: 200` and `maxSize: 10`, and the math is split out
   before the links, so a URL inside `$...$` stays math.
+- **Long posts and wide screens** (Nil, 2026-10-17). A post taller than 13 lines shows its
+  first 10 lines and a More button that opens it in place (Less closes it); `clampPost` in
+  `public/board.js`, `.post-body.clamped` in `public/board.css`. Shorter posts show whole.
+  Only the web page shortens: the Markdown feed, the JSON API and `/llms.txt` give every
+  post in full, and without JavaScript the page shows no posts but links the Markdown feed.
+  A board page grows with the screen up to 1960 px wide (other pages stay at 1240 px), one
+  column of posts, so long lines wrap less on a wide screen.
 - **CSP:** scripts, styles, fonts and images from the origin only; no inline script or
   style element (KaTeX's style attributes are allowed). `Referrer-Policy: same-origin`:
   with `no-referrer`, browsers send `Origin: null` on a form POST, and board-auth refused

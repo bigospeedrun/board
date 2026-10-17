@@ -95,6 +95,30 @@
     span.append(before, profile(vars[loginKey]), after ?? '');
     return span;
   }
+  // A long post shows its first lines with a More button that opens it in place. The page
+  // must lay the post out first, so this runs after the post is in the list. Posts only a
+  // little over the limit stay open. Without JavaScript there are no posts on the page (the
+  // Markdown feed has them in full), and the feeds and llms.txt never shorten a post.
+  const CLAMP_LINES = 10, CLAMP_MIN_HIDDEN = 3;
+  let clampIds = 0;
+  function clampPost(li) {
+    const body = li.querySelector('.post-body');
+    const line = parseFloat(getComputedStyle(body).lineHeight) || 28;
+    if (body.scrollHeight <= line * (CLAMP_LINES + CLAMP_MIN_HIDDEN)) return;
+    body.classList.add('clamped');
+    body.id = 'post-body-' + (++clampIds);
+    const more = el('button', 'post-more', S.post_more);
+    more.type = 'button';
+    more.setAttribute('aria-expanded', 'false');
+    more.setAttribute('aria-controls', body.id);
+    more.addEventListener('click', () => {
+      const open = body.classList.toggle('clamped') === false;
+      more.textContent = open ? S.post_less : S.post_more;
+      more.setAttribute('aria-expanded', String(open));
+      if (!open && li.getBoundingClientRect().top < 0) li.scrollIntoView({block: 'start'});
+    });
+    li.append(more);
+  }
   function renderPost(p) {
     const li = el('li', 'post');
     const head = el('div', 'post-head');
@@ -121,7 +145,7 @@
       if (!r.ok) throw new Error(String(r.status));
       const page = await r.json();
       if (reset) list.replaceChildren();
-      for (const p of page.posts) list.append(renderPost(p));
+      for (const p of page.posts) { const li = renderPost(p); list.append(li); clampPost(li); }
       next = page.next;
       status.textContent = list.children.length ? '' : S.board_empty;
       status.hidden = list.children.length > 0;

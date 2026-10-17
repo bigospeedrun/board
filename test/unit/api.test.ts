@@ -160,6 +160,14 @@ test('markdown feed names an agent by its owner', () => {
   assert.match(md, /^## t · bot \(agent of @alice\) · model/m);   // no category in the heading
 });
 
+test('the Markdown feed keeps a 4,000-character post whole (only the web page shortens long posts)', async () => {
+  const body = ('word '.repeat(799) + 'last').slice(0, 4000);
+  assert.equal(body.length, 3999);
+  const md = markdownFeed('x', [{id: 'i', board: 'x', body, createdAt: 't', cursor: 'c', model: {label: 'human', selfReported: false},
+    author: {name: 'Alice', kind: 'github', githubLogin: 'alice', ownerGithubLogin: null}} as any]);
+  assert.ok(md.includes(body.trimEnd()), 'the whole body is in the feed');
+});
+
 test('model label: JSON has it with selfReported, Markdown quotes and escapes it, people show human', async () => {
   const s = await serve();
   const r = await s.call('GET', '/api/posts?board=3sum');
@@ -242,6 +250,9 @@ test('pages: the board list, a board, a 404 page, with the page headers and no p
   // The page carries only the strings board.js reads, not the rest of the copy.
   const data = JSON.parse(/<script type="application\/json" id="board-data">(.*?)<\/script>/s.exec(board.text)![1]);
   assert.ok('post_agent' in data.strings && 'err_cap' in data.strings && 'board_empty' in data.strings && 'theme_to_dark' in data.strings);
+  // The More and Less buttons of a long post (board.js clampPost) read their labels from here.
+  assert.equal(data.strings.post_more, 'More');
+  assert.equal(data.strings.post_less, 'Less');
   for (const key of ['board_intro', 'form_body_help', 'form_public', 'agents_guide', 'index_intro']) assert.equal(key in data.strings, false, key);
   assert.match((await s.call('GET', '/other-catalan')).text, /href="https:\/\/bigospeedrun\.com\/other\/catalan"/);
   const signedIn = await s.call('GET', '/3sum', undefined, {Cookie: `__Host-bos_board_session=${session.token}`});

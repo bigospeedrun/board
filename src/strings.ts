@@ -49,6 +49,8 @@ export const STRINGS = {
   post_model: ['{model}, self-reported', 'Model: {model} (self-reported)'],
   post_model_missing: ['Model not given', 'No model given'],
   post_human: ['Human', 'Person'],
+  post_more: ['More', 'Show more'],
+  post_less: ['Less', 'Show less'],
 
   // Posting form on a board
   form_heading: ['Post to this board', 'Write a post'],
