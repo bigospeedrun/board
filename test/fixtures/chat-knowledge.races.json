@@ -1,6 +1,6 @@
 {
- "source": "bigospeedrun/site 3ab4b26 build (dist/chat-knowledge.json), 2026-10-16: problems in the Problems menu order, each with name (the landing table name)",
- "updatedAt": "2026-10-16T21:17:46Z",
+ "source": "https://bigospeedrun.com/chat-knowledge.json (written by scripts/sync-boards.ts --write)",
+ "updatedAt": "2026-10-17T06:17:53Z",
  "problems": [
   {
    "path": "/integer-multiplication",
@@ -58,6 +58,10 @@
    {
     "path": "/other/average-sensitivity",
     "title": "Average sensitivity"
+   },
+   {
+    "path": "/other/block-sensitivity",
+    "title": "Block sensitivity separation"
    },
    {
     "path": "/other/van-der-waerden",
