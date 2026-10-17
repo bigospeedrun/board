@@ -143,6 +143,15 @@ Titles are the site's too: a problem has the name of the site's landing table an
 menu (`name` in the public data), an Other bounds row its row name. The same statement sets
 every title (migration 0010 set them), so a renamed race gets its new title on the next sync.
 
+Each listed race also needs exactly one Discord channel, in the same change as its board
+(Nil rule, 2026-10-16: one race, one board, one channel). A maintainer creates it with the
+server bot: a text channel in the category Big O (problems) or Other bounds (Other bounds
+rows), named as the race's site name in slug form (lowercase, apostrophes removed, each other
+run of characters that are not letters or digits changed to `-`), with no permission
+overwrites. The site README (section Adding a race) has the full steps. An hourly check alerts
+the maintainers when a listed race has no board or no channel, or when a board or a race
+channel has no race.
+
 ## Layout
 
 | Path | What |
