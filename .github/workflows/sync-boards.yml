@@ -1,9 +1,10 @@
 # Give every race that bigospeedrun.com lists its board, with no person in the loop (Nil
 # rule 2026-10-16: one race, one board, one Discord channel; no recurring manual step).
 # Every hour, scripts/sync-boards.ts reads the site's public race list and writes a
-# migration when a race has no board, or when the order or a title changed. The job tests
-# and commits that migration to main, then starts image.yml (a push with GITHUB_TOKEN does
-# not start other workflows; a workflow_dispatch does). The VPS auto-deploy then deploys
+# migration when a race has no board, or when the order or a title changed, together with
+# the test race list (test/fixtures/chat-knowledge.races.json). The job runs the type check
+# and the unit tests, commits both to main, then starts image.yml and test.yml (the DB
+# tests): a push with GITHUB_TOKEN does not start other workflows; a workflow_dispatch does. The VPS auto-deploy then deploys
 # the image after its off-box backup gate. Boards are never removed or renamed by slug.
 # The office box also starts this workflow when its race-parity reader sees a race with no
 # board, so a late GitHub schedule does not delay a new board.
@@ -42,7 +43,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TARGET_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          git add -- db/migrations
+          git add -- db/migrations test/fixtures/chat-knowledge.races.json
           if git diff --cached --quiet; then
             echo 'Every listed race has its board, in the site order, with the site titles.'
             exit 0
@@ -57,3 +58,4 @@ jobs:
           # A rejected push (main moved) fails this run; the next run starts from the new main.
           git push --quiet origin "HEAD:refs/heads/$TARGET_BRANCH"
           gh workflow run image.yml --ref "$TARGET_BRANCH"
+          gh workflow run test.yml --ref "$TARGET_BRANCH"

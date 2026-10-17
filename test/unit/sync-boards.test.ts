@@ -4,17 +4,28 @@ import assert from 'node:assert/strict';
 import {readFileSync, mkdtempSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {racesFrom, seededSlugs, migrationSql, nextMigrationName, statedOrder, statedBoards, orderSql, plan} from '../../scripts/sync-boards.ts';
+import {racesFrom, seededSlugs, migrationSql, nextMigrationName, statedOrder, statedBoards, orderSql, plan, fixtureFrom} from '../../scripts/sync-boards.ts';
 import {indexPage} from '../../src/pages.ts';
 
 const fixture = JSON.parse(readFileSync(new URL('../fixtures/chat-knowledge.races.json', import.meta.url), 'utf8'));
 
-test('every public race in the 2026-10-16 snapshot has a seeded board', () => {
-  // The fixture is the site's chat-knowledge.json at a66107b (problems in the menu order).
+test('every public race in the fixture has a seeded board', () => {
+  // The fixture is the race list of the site's chat-knowledge.json that the last sync used
+  // (problems in the menu order); sync-boards.ts --write rewrites it with each migration.
   const races = racesFrom(fixture);
-  assert.equal(races.length, 19);
+  assert.ok(races.length >= 19);
   assert.deepEqual(races.filter(r => !seededSlugs().has(r.slug)), []);
   assert.ok(races.some(r => r.slug === 'other-ordered-matrix-removal'));
+});
+
+test('the fixture written by a sync keeps only the race fields, in order', () => {
+  const knowledge = {updatedAt: 't', other: 'dropped', problems: [{path: '/a', title: 'A', name: 'Short A', extra: 1}, {path: '/b', title: 'B'}],
+    otherBounds: {rows: [{path: '/other/c', title: 'C', claims: []}]}};
+  const written: any = fixtureFrom(knowledge, 'https://bigospeedrun.com/chat-knowledge.json');
+  assert.deepEqual(written.problems, [{path: '/a', title: 'A', name: 'Short A'}, {path: '/b', title: 'B'}]);
+  assert.deepEqual(written.otherBounds, {rows: [{path: '/other/c', title: 'C'}]});
+  assert.deepEqual(racesFrom(written), racesFrom(knowledge));
+  assert.equal(written.other, undefined);
 });
 
 test('a new race produces an additive migration; bad paths are ignored', () => {

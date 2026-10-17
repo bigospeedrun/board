@@ -7,7 +7,7 @@
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn, spawnSync} from 'node:child_process';
-import {mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync} from 'node:fs';
+import {mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync} from 'node:fs';
 import {randomBytes, createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -95,7 +95,8 @@ test('the dump program streams meta.json and an encrypted custom-format dump of 
   assert.equal(meta.dump.role, 'board_dump');
   assert.equal(meta.encryption.recipient, recipient);
   assert.equal(meta.migrations, null);
-  assert.equal(meta.row_counts['board_meta.migration'], 10);
+  // One row per migration file; the hourly board sync adds files.
+  assert.equal(meta.row_counts['board_meta.migration'], readdirSync(new URL('../../db/migrations/', import.meta.url)).filter(f => f.endsWith('.sql')).length);
   assert.equal(meta.row_counts['board.audit_log'], 1);
   assert.equal(meta.row_counts['board.board'] > 0, true);
   // The ciphertext decrypts with the matching identity to a pg_dump custom archive.

@@ -5,6 +5,8 @@ import {randomBytes} from 'node:crypto';
 import pg from 'pg';
 import {startDb, type TestDb} from './pg.ts';
 import {migrate} from '../../db/migrate.ts';
+import {readFileSync} from 'node:fs';
+import {racesFrom} from '../../scripts/sync-boards.ts';
 
 let db: TestDb;
 before(async () => { db = await startDb(); });
@@ -23,7 +25,8 @@ test('migrations apply once; a rerun applies nothing', async () => {
   const owner = await db.client('board_owner');
   assert.deepEqual(await migrate(owner, {}), []);
   const boards = (await owner.query('SELECT count(*)::int AS n FROM board.board')).rows[0].n;
-  assert.equal(boards, 19);
+  // One board per race in the fixture (the race list of the last sync).
+  assert.equal(boards, racesFrom(JSON.parse(readFileSync(new URL('../fixtures/chat-knowledge.races.json', import.meta.url), 'utf8'))).length);
   await owner.end();
 });
 

@@ -17,6 +17,19 @@ import {RESERVED_SLUGS} from '../src/rules.ts';
 
 export const PUBLIC_URL = 'https://bigospeedrun.com/chat-knowledge.json';
 const MIGRATIONS = fileURLToPath(new URL('../db/migrations/', import.meta.url));
+// The race list that the tests check the migrations against. --write rewrites it with the
+// public data it used, so the hourly sync (.github/workflows/sync-boards.yml) passes the tests.
+const FIXTURE = fileURLToPath(new URL('../test/fixtures/chat-knowledge.races.json', import.meta.url));
+
+// The race fields of the public data, in its order: what FIXTURE holds.
+export function fixtureFrom(knowledge: any, source: string): object {
+  return {
+    source: `${source} (written by scripts/sync-boards.ts --write)`,
+    updatedAt: knowledge?.updatedAt ?? 'unknown',
+    problems: (knowledge?.problems ?? []).map((p: any) => ({path: p.path, title: p.title, ...(typeof p.name === 'string' ? {name: p.name} : {})})),
+    otherBounds: {rows: (knowledge?.otherBounds?.rows ?? []).map((r: any) => ({path: r.path, title: r.title}))},
+  };
+}
 
 export interface Race {slug: string; title: string}
 
@@ -110,6 +123,10 @@ if (import.meta.main) {
   if (!next) { console.log('All public races have a board, in the site order, with the site titles.'); process.exit(0); }
   const name = nextMigrationName(undefined, next.missing.length ? 'boards' : 'board_order');
   const sql = migrationSql(next.missing, next.order, source.startsWith('https://') ? source : 'local file', knowledge.updatedAt ?? 'unknown');
-  if (process.argv.includes('--write')) { writeFileSync(MIGRATIONS + name, sql); console.log('Wrote', name); }
+  if (process.argv.includes('--write')) {
+    writeFileSync(MIGRATIONS + name, sql);
+    writeFileSync(FIXTURE, JSON.stringify(fixtureFrom(knowledge, source), null, 1) + '\n');
+    console.log('Wrote', name, 'and the test race list');
+  }
   else console.log(`Would write ${name}:\n${sql}`);
 }
