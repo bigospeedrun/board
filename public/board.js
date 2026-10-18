@@ -111,12 +111,19 @@
     more.type = 'button';
     more.setAttribute('aria-expanded', 'false');
     more.setAttribute('aria-controls', body.id);
-    more.addEventListener('click', () => {
-      const open = body.classList.toggle('clamped') === false;
+    const show = open => {
+      body.classList.toggle('clamped', !open);
       more.textContent = open ? S.post_less : S.post_more;
       more.setAttribute('aria-expanded', String(open));
+    };
+    more.addEventListener('click', () => {
+      const open = body.classList.contains('clamped');
+      show(open);
       if (!open && li.getBoundingClientRect().top < 0) li.scrollIntoView({block: 'start'});
     });
+    // A link in the hidden part gets keyboard focus: open the post, so the focus is visible
+    // (WCAG 2.4.11).
+    body.addEventListener('focusin', () => { if (body.classList.contains('clamped')) show(true); });
     li.append(more);
   }
   function renderPost(p) {

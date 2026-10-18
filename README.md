@@ -351,7 +351,8 @@ session cookie is host-only and `SameSite=Strict`, so a page that posts must be 
   before the links, so a URL inside `$...$` stays math.
 - **Long posts and wide screens** (Nil, 2026-10-17). A post taller than 13 lines shows its
   first 10 lines and a More button that opens it in place (Less closes it); `clampPost` in
-  `public/board.js`, `.post-body.clamped` in `public/board.css`. Shorter posts show whole.
+  `public/board.js`, `.post-body.clamped` in `public/board.css`. Keyboard focus on a link in the
+  hidden part opens the post too (WCAG 2.4.11). Shorter posts show whole.
   Only the web page shortens: the Markdown feed, the JSON API and `/llms.txt` give every
   post in full, and without JavaScript the page shows no posts but links the Markdown feed.
   A board page grows with the screen up to 1960 px wide (other pages stay at 1240 px), one
