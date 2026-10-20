@@ -116,9 +116,34 @@ export function nextMigrationName(dir = MIGRATIONS, label = 'boards'): string {
   return String(Number(last?.slice(0, 4) ?? 0) + 1).padStart(4, '0') + '_' + label + '.sql';
 }
 
+// The public data, read with retries: the site's edge can answer with an HTML error page for a
+// minute (a failed run on 2026-10-19 11:15 UTC got "<!DOCTYPE" instead of JSON). A page that is
+// not JSON counts as a failed try. After the last try the error names the status, the type and
+// the start of the body, so the run log shows what the site sent.
+export const RETRY_DELAYS_MS = [10000, 20000, 40000, 60000];
+export async function readPublicJson(url: string, get: typeof fetch = fetch, sleep: (ms: number) => Promise<unknown> = ms => new Promise(r => setTimeout(r, ms)), delays = RETRY_DELAYS_MS): Promise<any> {
+  let last = '';
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    if (attempt) await sleep(delays[attempt - 1]);
+    try {
+      const response = await get(url, {signal: AbortSignal.timeout(15000)});
+      const text = await response.text();
+      try {
+        if (response.ok) return JSON.parse(text);
+      } catch {}
+      last = `HTTP ${response.status}, ${response.headers.get('content-type') ?? 'no content type'}, body starts ${JSON.stringify(text.slice(0, 80)).replace(/[^\x20-\x7e]/g, '?')}`;
+    } catch (error) {
+      const cause = (error as any).cause;
+      last = `${(error as Error).name}: ${(error as Error).message}${cause ? ` (${cause.code ?? cause.message})` : ''}`;
+    }
+    console.warn(`Try ${attempt + 1} of ${delays.length + 1} to read ${url} failed: ${last}`);
+  }
+  throw new Error(`Cannot read ${url} after ${delays.length + 1} tries: ${last}`);
+}
+
 if (import.meta.main) {
   const source = process.argv.slice(2).find(a => !a.startsWith('--')) ?? PUBLIC_URL;
-  const knowledge = /^https:\/\//.test(source) ? await (await fetch(source, {signal: AbortSignal.timeout(15000)})).json() : JSON.parse(readFileSync(source, 'utf8'));
+  const knowledge = /^https:\/\//.test(source) ? await readPublicJson(source) : JSON.parse(readFileSync(source, 'utf8'));
   const next = plan(racesFrom(knowledge), seededSlugs(), statedBoards());
   if (!next) { console.log('All public races have a board, in the site order, with the site titles.'); process.exit(0); }
   const name = nextMigrationName(undefined, next.missing.length ? 'boards' : 'board_order');

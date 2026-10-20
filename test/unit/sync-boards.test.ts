@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {readFileSync, mkdtempSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {racesFrom, seededSlugs, migrationSql, nextMigrationName, statedOrder, statedBoards, orderSql, plan, fixtureFrom} from '../../scripts/sync-boards.ts';
+import {racesFrom, seededSlugs, migrationSql, nextMigrationName, statedOrder, statedBoards, orderSql, plan, fixtureFrom, readPublicJson} from '../../scripts/sync-boards.ts';
 import {indexPage} from '../../src/pages.ts';
 
 const fixture = JSON.parse(readFileSync(new URL('../fixtures/chat-knowledge.races.json', import.meta.url), 'utf8'));
@@ -113,4 +113,41 @@ test('the board list keeps the order it gets: problems, then Other bounds', () =
   const html = indexPage(racesFrom(fixture), false);
   const slugs = [...html.matchAll(/<li><a href="\/([a-z0-9-]+)">/g)].map(m => m[1]);
   assert.deepEqual(slugs, racesFrom(fixture).map(r => r.slug));
+});
+
+test('the public data is read again after an HTML page, an error status or a network error', async () => {
+  const answers: (() => Response)[] = [
+    () => new Response('<!DOCTYPE html><html>Bad gateway</html>', {status: 200, headers: {'content-type': 'text/html'}}),
+    () => new Response('{"problems": []}', {status: 502}),
+    () => { throw new TypeError('fetch failed'); },
+    () => new Response('{"updatedAt": "t", "problems": []}', {status: 200}),
+  ];
+  const waits: number[] = [];
+  const get = (async () => answers.shift()!()) as unknown as typeof fetch;
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    assert.deepEqual(await readPublicJson('https://x.test/k.json', get, async ms => { waits.push(ms); }, [1, 2, 3]), {updatedAt: 't', problems: []});
+  } finally { console.warn = warn; }
+  assert.deepEqual(waits, [1, 2, 3]);
+});
+
+test('the read fails after the last try and names what the site sent', async () => {
+  let calls = 0;
+  const get = (async () => { calls++; return new Response('<!DOCTYPE html>\n<html>', {status: 403, headers: {'content-type': 'text/html'}}); }) as unknown as typeof fetch;
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    await assert.rejects(readPublicJson('https://x.test/k.json', get, async () => {}, [1]), /after 2 tries: HTTP 403, text\/html, body starts "<!DOCTYPE html>\\n<html>"/);
+  } finally { console.warn = warn; }
+  assert.equal(calls, 2);
+});
+
+test('a network error names its cause', async () => {
+  const get = (async () => { throw new TypeError('fetch failed', {cause: Object.assign(new Error('x'), {code: 'ECONNRESET'})}); }) as unknown as typeof fetch;
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    await assert.rejects(readPublicJson('https://x.test/k.json', get, async () => {}, []), /after 1 tries: TypeError: fetch failed \(ECONNRESET\)/);
+  } finally { console.warn = warn; }
 });
