@@ -7,7 +7,7 @@ import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, existsSy
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer, type Server} from 'node:http';
-import {spawn} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import type {AddressInfo} from 'node:net';
 
 const script = new URL('../../deploy/auto-deploy.sh', import.meta.url).pathname;
@@ -43,11 +43,19 @@ writeFileSync(join(fake, 'unhealthy'), '');
 // docker: pull and inspect read the fake labels; `run` prints an image's migration list
 // (fake/migrations/<digest>, else the base list); `compose up` starts whatever release.env
 // names and fails for an unhealthy digest. The probe prints what runs, if it is healthy.
-writeFileSync(join(fake, 'docker'), `#!/usr/bin/env bash
+// `image ls` prints the rows of the file images.ls whatever it is asked (so the script's own repository check is what
+// the tests see), `image rm` records its target in `removed` and fails for a digest in `rm-fail`; every call is kept in `calls`.
+const fakeDocker = (fake: string) => `#!/usr/bin/env bash
 fake=${fake}
+echo "$*" >> "$fake/calls"
 case $1 in
 pull) grep -qx "\${3##*@}" "$fake/pull-fail" 2>/dev/null && exit 1; exit 0 ;;
-image) ref=\${@: -1}; cat "$fake/labels/\${ref##*@}" ;;
+image)
+  case $2 in
+  ls) cat "$fake/images.ls" 2>/dev/null; exit 0 ;;
+  rm) echo "$3" >> "$fake/removed"; grep -qx "\${3##*@}" "$fake/rm-fail" 2>/dev/null && exit 1; exit 0 ;;
+  *) ref=\${@: -1}; cat "$fake/labels/\${ref##*@}" ;;
+  esac ;;
 run)
   [[ -e $fake/run-fail ]] && exit 1
   while [[ $1 != --entrypoint ]]; do shift; done
@@ -59,7 +67,8 @@ compose)
   d=$(sed -n 's/^BOARD_IMAGE=.*@//p' "$env_file"); echo "$d" > "$fake/running"
   grep -qx "$d" "$fake/unhealthy" && exit 1; exit 0 ;;
 esac
-`, {mode: 0o755});
+`;
+writeFileSync(join(fake, 'docker'), fakeDocker(fake), {mode: 0o755});
 writeFileSync(join(fake, 'probe'), `#!/usr/bin/env bash
 d=$(cat ${fake}/running); grep -qx "$d" ${fake}/unhealthy && exit 1; echo "$d"
 `, {mode: 0o755});
@@ -379,4 +388,155 @@ test('a rollback of an image that added a migration stops the deploys; release.e
   assert.equal(status.result, 'stopped');
   assert.equal(status.phase, 'marker');
   rmSync(stateFile('stopped'));
+});
+
+// Old images (2026-11-01): after a successful deploy the tick removes the old images of its own repository and
+// nothing else. Each test has its own root and its own fake docker.
+const repo = 'ghcr.io/bigospeedrun/board';
+// Distinct for 1 to 255 (digest(10) and digest(1) would be alike: the digit string is cut to 64).
+const hex = (n: number) => 'sha256:' + n.toString(16).padStart(2, '0').repeat(32);
+const row = (n: number, name = repo, digestText = hex(n)) => `2026-10-${String(10 + n).padStart(2, '0')} 12:00:00 +0000 UTC|${name}|${digestText}`;
+function sandbox(release: number, previous?: number, rows: string[] = []) {
+  const box = mkdtempSync(join(dir, 'prune-')), r = join(box, 'root'), e = join(box, 'etc'), f = join(box, 'fake');
+  for (const path of [join(r, 'auto-deploy'), f, join(f, 'labels'), join(f, 'images', 'base', 'db/migrations')]) mkdirSync(path, {recursive: true});
+  mkdirSync(e, {mode: 0o700});
+  for (const [name, text] of Object.entries(base5)) writeFileSync(join(f, 'images', 'base', 'db/migrations', name), text);
+  writeFileSync(join(e, 'board-auto-deploy.env'), envLines, {mode: 0o600});
+  for (let n = 1; n <= 12; n++) writeFileSync(join(f, 'labels', hex(n)), commit(n));
+  writeFileSync(join(r, 'compose.board.yml'), 'services: {}\n');
+  writeFileSync(join(r, 'release.env'), `BOARD_SOCKET_GID=64543\nBOARD_IMAGE=${repo}@${hex(release)}\n`);
+  if (previous) writeFileSync(join(r, 'previous.env'), `BOARD_SOCKET_GID=64543\nBOARD_IMAGE=${repo}@${hex(previous)}\n`);
+  writeFileSync(join(r, 'release.commit'), commit(release) + '\n');
+  writeFileSync(join(f, 'running'), hex(release));
+  writeFileSync(join(f, 'unhealthy'), '');
+  writeFileSync(join(f, 'images.ls'), rows.join('\n') + '\n');
+  writeFileSync(join(f, 'docker'), fakeDocker(f), {mode: 0o755});
+  writeFileSync(join(f, 'probe'), `#!/usr/bin/env bash\nd=$(cat ${f}/running); grep -qx "$d" ${f}/unhealthy && exit 1; echo "$d"\n`, {mode: 0o755});
+  writeFileSync(join(f, 'socket-dirs'), '#!/usr/bin/env bash\n', {mode: 0o755});
+  const env = {PATH: process.env.PATH, BOARD_ROOT: r, BOARD_ENV_DIR: e, BOARD_UNIT_DIR: join(box, 'units'), BOARD_DOCKER: join(f, 'docker'), BOARD_PROBE: join(f, 'probe'),
+    BOARD_PULL_MARKER: join(box, 'last-pull.json'), BOARD_SOCKET_DIRS: join(f, 'socket-dirs'), BOARD_PRUNE_SLEEP: '0', BOARD_REGISTRY: 'http://127.0.0.1:1'};
+  const text = (name: string) => existsSync(join(f, name)) ? readFileSync(join(f, name), 'utf8').trim().split('\n').filter(Boolean) : [];
+  return {r, e, f, env, text, removed: () => text('removed').map(x => x.replace(`${repo}@`, '')), calls: () => text('calls')};
+}
+// Nine images of the board, one of another repository, one without a digest, the same digest twice, a lookalike repository.
+const catalog = [...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => row(n)), row(10, 'ghcr.io/wall-game/server', hex(10)), row(11, repo, '<none>'), row(9), row(1, 'ghcr.io/bigospeedrun/board-old', hex(1))];
+const prune = (box: ReturnType<typeof sandbox>, ...args: string[]) => spawnSync('bash', [script, '--prune-images', ...args], {env: box.env, encoding: 'utf8'});
+
+test('--prune-images is a dry run: it keeps the running image, the rollback image and the 5 newest, and removes nothing', () => {
+  const box = sandbox(3, 2, catalog);
+  const out = prune(box);
+  assert.equal(out.status, 0, out.stderr);
+  // Newest 5 are 9 to 5; 3 runs, 2 is the rollback image; 4 and 1 are the only ones to go.
+  assert.deepEqual([...out.stdout.matchAll(/would remove ghcr\.io\/bigospeedrun\/board@(sha256:\w+)/g)].map(m => m[1]), [hex(4), hex(1)]);
+  assert.match(out.stdout, /prune \(dry-run\): kept 7, would remove 2, failed 0, left 0/);
+  assert.deepEqual(box.removed(), []);
+  assert.ok(!existsSync(join(box.r, 'auto-deploy/status.json')), 'a manual run writes no status');
+  assert.ok(box.calls().includes(`image ls --no-trunc --digests --format {{.CreatedAt}}|{{.Repository}}|{{.Digest}} ${repo}`));
+});
+
+test('--prune-images --apply removes at most 25, or --max, newest first, only digests of the repository, never forced', () => {
+  const box = sandbox(3, 2, catalog);
+  let out = prune(box, '--apply', '--max', '1');
+  assert.equal(out.status, 0, out.stderr);
+  assert.deepEqual(box.removed(), [hex(4)]);
+  assert.match(out.stdout, /removed 1, failed 0, left 1/);
+  out = prune(box, '--apply');
+  assert.deepEqual(box.removed(), [hex(4), hex(4), hex(1)]);
+  for (const call of box.calls().filter(c => c.startsWith('image rm'))) assert.match(call, /^image rm ghcr\.io\/bigospeedrun\/board@sha256:[0-9a-f]{64}$/);
+  assert.ok(!box.calls().some(c => /prune| -f|--force|system/.test(c)), 'no prune and no force');
+  assert.equal(prune(box, '--apply', '--max', '0').status, 2);
+  assert.equal(prune(box, '--bogus').status, 2);
+});
+
+test('an image that cannot be removed is logged and does not stop the rest; a missing previous.env is no error', () => {
+  const box = sandbox(3, undefined, catalog);
+  writeFileSync(join(box.f, 'rm-fail'), hex(4) + '\n');
+  const out = prune(box, '--apply');
+  assert.equal(out.status, 0, out.stderr);
+  assert.match(out.stdout, /could not remove ghcr\.io\/bigospeedrun\/board@sha256:(?:04)+ \(in use\?\)/);
+  assert.match(out.stdout, /kept 6, removed 2, failed 1, left 0/);
+});
+
+test('a tick that holds the deploy lock stops --prune-images', async () => {
+  const box = sandbox(3, 2, catalog);
+  const holder = spawn('flock', [join(box.r, 'deploy.lock'), 'sleep', '1']);
+  const released = new Promise(done => holder.on('close', done));
+  await new Promise(done => setTimeout(done, 300));
+  const out = prune(box, '--apply');
+  assert.equal(out.status, 1);
+  assert.match(out.stdout, /holds the lock/);
+  assert.deepEqual(box.removed(), []);
+  await released;
+});
+
+function deployTick(box: ReturnType<typeof sandbox>): Promise<{status: Record<string, unknown>; output: string}> {
+  return new Promise(done => {
+    const child = spawn('bash', [script], {env: {...box.env, BOARD_REGISTRY: base(), BOARD_GITHUB_API: base()}});
+    let output = '';
+    child.stdout.on('data', chunk => output += chunk); child.stderr.on('data', chunk => output += chunk);
+    child.on('close', () => done({status: JSON.parse(readFileSync(join(box.r, 'auto-deploy/status.json'), 'utf8')), output}));
+  });
+}
+
+test('a successful deploy prunes; a rollback, a stopped tick and an unchanged tag prune nothing', async () => {
+  const rows = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(n => row(n));
+  mainDigest = hex(12);
+  let box = sandbox(3, 2, rows);
+  let {status, output} = await deployTick(box);
+  assert.equal(status.result, 'deployed');
+  // Running 12, rollback 3 (the old release), newest 5 of the others = 11..7: 6, 5, 4, 2 and 1 go.
+  assert.deepEqual(box.removed(), [hex(6), hex(5), hex(4), hex(2), hex(1)]);
+  assert.match(output, /prune \(apply\): kept 7, removed 5, failed 0, left 0/);
+  assert.equal(status.deployed, commit(12));
+
+  box = sandbox(3, 2, rows);
+  writeFileSync(join(box.f, 'unhealthy'), hex(12) + '\n');
+  ({status} = await deployTick(box));
+  assert.equal(status.result, 'rolled_back');
+  assert.deepEqual(box.removed(), []);
+  assert.ok(!box.calls().some(c => c.startsWith('image ls')), 'a rollback does not even list the images');
+
+  box = sandbox(3, 2, rows);
+  writeFileSync(join(box.r, 'auto-deploy/stopped'), '');
+  assert.equal((await deployTick(box)).status.result, 'stopped');
+  mainDigest = hex(3);
+  box = sandbox(3, 2, rows);
+  assert.equal((await deployTick(box)).status.result, 'up_to_date');
+  assert.deepEqual(box.removed(), []);
+  mainDigest = digest(4);
+});
+
+test('a tick caps its removals at 25 and leaves the rest for the next deploy', async () => {
+  const many = Array.from({length: 40}, (_, i) => `2026-09-${String(i % 28 + 1).padStart(2, '0')} 1${Math.floor(i / 28)}:00:00 +0000 UTC|${repo}|${hex(100 + i)}`);
+  mainDigest = hex(12);
+  const box = sandbox(3, 2, [...many, row(12), row(3), row(2)]);
+  const {output} = await deployTick(box);
+  assert.equal(box.removed().length, 25);
+  assert.match(output, /removed 25, failed 0, left \d+/);
+  mainDigest = digest(4);
+});
+
+function pruneAsync(box: ReturnType<typeof sandbox>, ...args: string[]): Promise<{status: number | null; stdout: string}> {
+ return new Promise(done => {
+  const child = spawn('bash', [script, '--prune-images', ...args], {env: {...box.env, BOARD_REGISTRY: base()}});
+  let stdout = '';
+  child.stdout.on('data', chunk => stdout += chunk); child.stderr.on('data', chunk => stdout += chunk);
+  child.on('close', status => done({status, stdout}));
+ });
+}
+
+test('the digest of the deploy target (the registry tag) is kept even when it is older than the newest 5', async () => {
+ // Image 1 is the oldest of nine: without the pin it goes. A registry that cannot be read pins nothing and says so.
+ mainDigest = hex(1);
+ let out = await pruneAsync(sandbox(3, 2, catalog), '--apply');
+ assert.equal(out.status, 0, out.stdout);
+ assert.deepEqual([...out.stdout.matchAll(/removed \S+@(sha256:\w+)/g)].map(m => m[1]), [hex(4)]);
+ assert.match(out.stdout, /kept 8, removed 1/);
+ mainDigest = hex(4);
+ const box = sandbox(3, 2, catalog);
+ assert.deepEqual([...prune(box).stdout.matchAll(/would remove \S+@(sha256:\w+)/g)].map(m => m[1]), [hex(4), hex(1)], 'unreachable registry: no pin');
+ assert.match(prune(box).stdout, /could not be read; the target is not pinned/);
+ out = await pruneAsync(box);
+ assert.deepEqual([...out.stdout.matchAll(/would remove \S+@(sha256:\w+)/g)].map(m => m[1]), [hex(1)]);
+ mainDigest = digest(4);
 });
