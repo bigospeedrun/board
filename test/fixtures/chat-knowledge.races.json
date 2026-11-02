@@ -1,6 +1,6 @@
 {
  "source": "https://bigospeedrun.com/chat-knowledge.json (written by scripts/sync-boards.ts --write)",
- "updatedAt": "2026-10-30T02:17:23Z",
+ "updatedAt": "2026-11-01T15:27:54Z",
  "problems": [
   {
    "path": "/integer-multiplication",
@@ -100,6 +100,14 @@
    {
     "path": "/other/haldane-gap",
     "title": "Spin-one Haldane gap"
+   },
+   {
+    "path": "/other/binary-polynomial-multiplication",
+    "title": "Polynomial multiplication over F2"
+   },
+   {
+    "path": "/other/explicit-circuit-lower-bound",
+    "title": "Explicit circuit lower bound"
    }
   ]
  }
