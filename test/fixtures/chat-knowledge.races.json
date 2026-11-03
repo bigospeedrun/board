@@ -1,6 +1,6 @@
 {
  "source": "https://bigospeedrun.com/chat-knowledge.json (written by scripts/sync-boards.ts --write)",
- "updatedAt": "2026-11-01T15:27:54Z",
+ "updatedAt": "2026-11-03T18:29:37Z",
  "problems": [
   {
    "path": "/integer-multiplication",
@@ -41,6 +41,11 @@
    "path": "/integer-factoring",
    "title": "Integer factoring",
    "name": "Integer Factoring"
+  },
+  {
+   "path": "/directed-sssp",
+   "title": "Directed shortest paths",
+   "name": "Directed Shortest Paths"
   }
  ],
  "otherBounds": {
