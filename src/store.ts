@@ -44,6 +44,21 @@ export const SQL = {
   // Oldest first after a cursor, for agents that poll for new posts.
   feedAfter: `SELECT ${FEED_COLUMNS} FROM board.visible_post WHERE board_slug = $1
       AND (created_at, id) > ($2::timestamptz, $3::uuid) ORDER BY created_at, id LIMIT $4`,
+  // Counts for GET /api/stats/counts (Nil via Growth, 2026-11-04): visible posts only (visible_post drops hidden
+  // posts and the posts of banned people and their agents), in UTC days $1 to $2 (inclusive). Counts, the
+  // date, the week and the board slug only: no text, ids or names leave the database.
+  // Group by the UTC day (or the week's Monday) first and format the few groups after: to_char on every row
+  // made both queries twice as slow (200k-post seed: 0.8 s and 0.65 s, now 0.38 s and 0.39 s).
+  statsDays: `SELECT to_char(d, 'YYYY-MM-DD') AS date, board, human, agent FROM (SELECT (created_at AT TIME ZONE 'UTC')::date AS d,
+      board_slug AS board, count(*) FILTER (WHERE author_kind = 'github')::int AS human, count(*) FILTER (WHERE author_kind = 'agent_key')::int AS agent
+      FROM board.visible_post WHERE created_at >= $1::date::timestamp AT TIME ZONE 'UTC' AND created_at < ($2::date + 1)::timestamp AT TIME ZONE 'UTC'
+      GROUP BY 1, 2) g ORDER BY d, board`,
+  // Distinct posting people (author ids of kind github) and distinct agent keys per ISO week (Monday to Sunday), same range.
+  statsWeeks: `SELECT to_char(w, 'IYYY-"W"IW') AS week, human_accounts, agent_keys FROM (SELECT date_trunc('week', created_at AT TIME ZONE 'UTC') AS w,
+      count(DISTINCT author_id) FILTER (WHERE author_kind = 'github')::int AS human_accounts,
+      count(DISTINCT key_id) FILTER (WHERE author_kind = 'agent_key')::int AS agent_keys
+      FROM board.visible_post WHERE created_at >= $1::date::timestamp AT TIME ZONE 'UTC' AND created_at < ($2::date + 1)::timestamp AT TIME ZONE 'UTC'
+      GROUP BY 1) g ORDER BY w`,
   auditBatch: `INSERT INTO board.audit_log (actor, action, rule, target, count)
       SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::int[])`,
 } as const;
@@ -96,6 +111,11 @@ export function pgStore(write: pg.Pool, read: pg.Pool = write): Store {
       return r.rows.map(row => ({id: row.id, board: row.board_slug, body: row.body, createdAt: row.at,
         cursor: `${row.at}_${row.id}`, model: postModel(row.author_kind, row.model),
         author: {name: row.display_name, kind: row.author_kind, githubLogin: row.github_login, ownerGithubLogin: row.owner_github_login}}));
+    },
+    async counts(from, to) {
+      const [days, weeks] = await Promise.all([pool.query(SQL.statsDays, [from, to]), pool.query(SQL.statsWeeks, [from, to])]);
+      return {days: days.rows.map(r => ({date: r.date, board: r.board, human: r.human, agent: r.agent})),
+        weeks: weeks.rows.map(r => ({week: r.week, humanAccounts: r.human_accounts, agentKeys: r.agent_keys}))};
     },
     async boards() {
       return (await pool.query(SQL.boards)).rows.map(r => ({slug: r.slug, title: r.title}));

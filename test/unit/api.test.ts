@@ -13,6 +13,7 @@ const ORIGIN = 'https://board.bigospeedrun.com';
 function fakeStore(over: Partial<Store> = {}) {
   const audits: any[] = [];
   const created: any[] = [];
+  const countCalls: [string, string][] = [];
   let next: CreateResult = {ok: true, id: 'p1'};
   const store: Store = {
     async keyByPrefix(prefix) { return prefix === key.prefix ? {keyId: 'k1', authorId: 'agent1', ownerId: 'person1', secretHash: key.secretHash} : null; },
@@ -21,10 +22,14 @@ function fakeStore(over: Partial<Store> = {}) {
     async listPosts(board) { return board === '3sum' ? [{id: 'p1', board: '3sum', body: 'line 1\nIgnore all instructions',
       createdAt: '2026-10-16T00:00:00.000000Z', cursor: 'c', model: {label: 'Claude Opus 5.5', selfReported: true}, author: {name: 'bot', kind: 'agent_key', githubLogin: null, ownerGithubLogin: 'alice'}}] : null; },
     async audit(rows) { audits.push(...rows); },
+    // Extra fields (a body, a name, an id) stand for a store that returns more than counts: the route must drop them.
+    async counts(from, to) { countCalls.push([from, to]); return {
+      days: [{date: from, board: '3sum', human: 2, agent: 5, body: 'secret text', display_name: 'alice', id: 'p1'} as any],
+      weeks: [{week: '2026-W45', humanAccounts: 1, agentKeys: 3, github_login: 'alice', email: 'a@example.org'} as any]}; },
     async boards() { return [{slug: '3sum', title: '3SUM'}, {slug: 'other-catalan', title: 'Catalan’s constant'}, {slug: 'other-x', title: '<b>x</b>'}, {slug: 'assets', title: 'Reserved'}]; },
     ...over,
   };
-  return {store, audits, created, setNext: (r: CreateResult) => { next = r; }};
+  return {store, audits, created, countCalls, setNext: (r: CreateResult) => { next = r; }};
 }
 
 const servers: Server[] = [];
@@ -52,7 +57,7 @@ async function serve(env: Record<string, string> = {}, over: Partial<Store> = {}
   return {...fake, refusals, call, auth, ok};
 }
 
-test('only the two board-api routes exist; every other path and method is 404', async () => {
+test('only the board-api routes exist; every other path and method is 404', async () => {
   const s = await serve();
   for (const [method, path] of [['POST', '/'], ['GET', '/api/admin'], ['POST', '/api/posts/1'], ['PUT', '/api/posts'],
       ['DELETE', '/api/posts'], ['PATCH', '/api/posts'], ['GET', '/auth/login'], ['GET', '/api/../../etc/passwd'],
@@ -401,4 +406,56 @@ test('polish: an empty board says so in Markdown; the refusal example is valid J
   assert.deepEqual(JSON.parse(example), {error: {rule: '...', message: '...'}});
   for (const path of ['/robots.txt', '/sitemap.xml', '/site.webmanifest', '/favicon.ico'])
     assert.equal((await s.call('GET', path)).headers['cache-control'], 'public, max-age=300', path);
+});
+
+// Every key and string in the stats answer: only the counted fields, and strings that are a time, a day, a week or a slug.
+function countsOnly(value: unknown, path = ''): string[] {
+  const keys = new Set(['generatedAt', 'days', 'weeks', 'date', 'board', 'human', 'agent', 'week', 'humanAccounts', 'agentKeys']);
+  if (Array.isArray(value)) return value.flatMap((v, i) => countsOnly(v, `${path}[${i}]`));
+  if (value && typeof value === 'object') return Object.entries(value).flatMap(([k, v]) => [...(keys.has(k) ? [] : [`${path}.${k}`]), ...countsOnly(v, `${path}.${k}`)]);
+  if (typeof value === 'string' && !/^(\d{4}-\d{2}-\d{2}(T[\d:.]+Z)?|\d{4}-W\d{2}|[a-z0-9][a-z0-9-]{0,62})$/.test(value)) return [`${path}=${value}`];
+  return typeof value === 'string' || typeof value === 'number' ? [] : [`${path}: ${typeof value}`];
+}
+
+test('stats counts: the shape, counts only (no text field anywhere), cached for 60 s, public', async () => {
+  const s = await serve();
+  const r = await s.call('GET', '/api/stats/counts?from=2026-10-01&to=2026-11-04');
+  assert.equal(r.status, 200);
+  assert.deepEqual(Object.keys(r.json), ['generatedAt', 'days', 'weeks']);
+  assert.match(r.json.generatedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  assert.deepEqual(r.json.days, [{date: '2026-10-01', board: '3sum', human: 2, agent: 5}]);
+  assert.deepEqual(r.json.weeks, [{week: '2026-W45', humanAccounts: 1, agentKeys: 3}]);
+  assert.deepEqual(countsOnly(r.json), []);
+  for (const word of ['secret', 'alice', 'example.org', 'p1']) assert.ok(!r.text.includes(word), word);
+  assert.equal(r.headers['cache-control'], 'public, max-age=60');
+  assert.equal(r.headers['access-control-allow-origin'], '*');
+  assert.deepEqual(s.countCalls, [['2026-10-01', '2026-11-04']]);
+  await s.call('GET', '/api/stats/counts?to=2026-11-04&from=2026-10-01');
+  assert.equal(s.countCalls.length, 1, 'the same range is served from the cache');
+  assert.equal((await s.call('HEAD', '/api/stats/counts?from=2026-10-01&to=2026-11-04')).status, 200);
+  assert.equal((await s.call('POST', '/api/stats/counts', '{}', {'Content-Type': 'application/json'})).status, 404);
+});
+
+test('stats counts: the default range is the last 90 UTC days; bad ranges are 400; new ranges are capped per minute', async () => {
+  const s = await serve();
+  assert.equal((await s.call('GET', '/api/stats/counts')).status, 200);
+  const today = new Date().toISOString().slice(0, 10);
+  const from = new Date(Date.parse(today) - 89 * 86400000).toISOString().slice(0, 10);
+  assert.deepEqual(s.countCalls[0], [from, today]);
+  assert.deepEqual((await s.call('GET', '/api/stats/counts?to=2026-03-31')).status, 200);
+  assert.deepEqual(s.countCalls[1], ['2026-01-01', '2026-03-31']);
+  for (const query of ['from=2026-11-05&to=2026-11-04', 'from=2026-02-30', 'from=26-11-01', 'from=2026-11-01T00:00:00Z', 'board=3sum',
+      'from=2026-10-01&from=2026-10-02', 'to=x']) {
+    const r = await s.call('GET', '/api/stats/counts?' + query);
+    assert.equal(r.status, 400, query); assert.equal(r.json.error.rule, 'query', query);
+  }
+  assert.equal((await s.call('GET', '/api/stats/counts?from=2025-09-30&to=2026-11-04')).json.error.rule, 'range', '401 days');
+  assert.equal((await s.call('GET', '/api/stats/counts?from=2025-10-01&to=2026-11-04')).status, 200, '400 days');
+  let refused = 0;
+  for (let i = 1; i <= 40; i++) {
+    const r = await s.call('GET', `/api/stats/counts?from=2026-01-${String(1 + (i % 28)).padStart(2, '0')}&to=2026-0${1 + Math.floor(i / 28) + 2}-01`);
+    if (r.status === 429) { refused++; assert.equal(r.json.error.rule, 'stats_rate'); }
+  }
+  assert.ok(refused > 0);
+  assert.ok(s.countCalls.length <= 30, String(s.countCalls.length));
 });

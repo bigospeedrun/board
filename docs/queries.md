@@ -72,12 +72,24 @@ and the 5 s request deadline.
   1M posts need about 0.5 GB. The audit table grows by one row per accepted post plus
   at most one row per minute, actor and rule for refusals.
 
+- **Stats counts** (`GET /api/stats/counts`, `SQL.statsDays` and `SQL.statsWeeks`). They count every
+  visible post in their range, so they read `post` in one sequential pass with hash anti-joins against
+  `hidden` and `ban` and a hash join to `author`, then sort and group (no index helps a count of a
+  large share of the table). On the 200,000-post seed, the default 90 days (all of the seed) take
+  0.38 s and 0.39 s: about 2 µs per post, so a range with about 800,000 visible posts would reach
+  board_app's 2 s `statement_timeout` (an error 500, nothing else). The caps allow at most about
+  1,440 posts per board-day, so that is far away; if it comes near, a daily rollup table is the
+  next step. board-api computes each range at most once a minute (in-memory cache, 64 ranges) and
+  at most 30 new ranges a minute in all (then 429 `stats_rate`), so the route adds at most 60
+  such queries a minute, whatever the callers do.
+
 ## Plan regression test
 
 `test/db/plans.test.ts` seeds 200,000 posts with the same shape. It runs
 `EXPLAIN (FORMAT JSON)` on every hot query under the app or auth role, and fails if
 any plan node is a sequential scan on `post`, `author`, `api_key` or `session`. A
-third test checks that the guard does see a sequential scan. It runs with
+third test checks that the guard does see a sequential scan. The stats counts scan by design; a
+fourth test checks that they finish within 1 s on the seed. It runs with
 `npm run test:db` and in CI.
 
 ## Caching GET feeds at the edge

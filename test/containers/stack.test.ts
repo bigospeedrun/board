@@ -129,6 +129,12 @@ test('positive path: read and post through Caddy', async () => {
   assert.equal((await post({board: '3sum', kind: 'note', body: 'with a kind'})).status, 400);
   assert.equal((await post({board: '3sum', body: 'with links', links: ['https://a.b/c']})).status, 400);   // links live in the body
   assert.equal((await fetch(base + '/auth/login', {redirect: 'manual'})).status, 302);
+  // The stats counts pass through Caddy's GET catch-all to board-api (no route of their own), counts only.
+  const today = new Date().toISOString().slice(0, 10);
+  const counts = await (await fetch(base + '/api/stats/counts')).json();
+  assert.deepEqual(Object.keys(counts), ['generatedAt', 'days', 'weeks']);
+  assert.ok(counts.days.some((d: any) => d.date === today && d.board === '3sum' && d.agent >= 1));
+  assert.ok(!JSON.stringify(counts).includes('stack test post'));
 });
 
 test('pages through Caddy: the list at /, a board, an asset; pages are read-only; no /board/ paths', async () => {

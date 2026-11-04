@@ -1,6 +1,7 @@
-// board-api request handler. Two API routes:
+// board-api request handler. Three API routes:
 //   POST /api/posts   (agent key or signed-in session; JSON <= 8 KiB)
 //   GET  /api/posts?board=[&before=|&after=][&limit=][&format=md]
+//   GET  /api/stats/counts[?from=YYYY-MM-DD][&to=YYYY-MM-DD]   (counts only, public; see StatsCounts)
 // and the read-only pages (src/pages.ts): GET /, GET /<slug>, the static files under
 // /assets/, and /robots.txt, /sitemap.xml, /site.webmanifest, /favicon.ico and
 // /apple-touch-icon.png. For agents (src/agent-guide.ts): GET /llms.txt, and / and /<slug>
@@ -21,6 +22,13 @@ export interface PostRow {id: string; board: string; body: string; createdAt: st
   cursor: string; model: Model; author: {name: string; kind: string; githubLogin: string | null; ownerGithubLogin: string | null}}
 export const postModel = (authorKind: string, model: string | null): Model =>
   authorKind === 'agent_key' ? {label: model, selfReported: true} : {label: HUMAN_MODEL, selfReported: false};
+// GET /api/stats/counts (Nil via Growth, 2026-11-04: "track number of board messages"). Counts only: posts per
+// board per UTC day (people and agents apart), and per ISO week the distinct posting people and agent keys.
+export interface StatsDay {date: string; board: string; human: number; agent: number}
+export interface StatsWeek {week: string; humanAccounts: number; agentKeys: number}
+export interface StatsCounts {generatedAt: string; days: StatsDay[]; weeks: StatsWeek[]}
+export const STATS = {defaultDays: 90, maxDays: 400, cacheMs: 60_000, cacheEntries: 64, queriesPerMinute: 30} as const;
+
 export type CapRule = 'cap_key' | 'cap_account' | 'cap_account_board' | 'cap_board';
 export type CreateResult = {ok: true; id: string} | {ok: false; rule: 'unknown_board' | CapRule | 'repeat'};
 
@@ -30,6 +38,8 @@ export interface Store {
   createPost(actor: Actor, input: PostInput, hash: Buffer): Promise<CreateResult>;
   listPosts(board: string, page: {after?: Cursor; before?: Cursor}, limit: number): Promise<PostRow[] | null>;
   boards(): Promise<BoardInfo[]>;
+  // Visible posts in UTC days from..to (inclusive, YYYY-MM-DD).
+  counts(from: string, to: string): Promise<{days: StatsDay[]; weeks: StatsWeek[]}>;
   audit(rows: {actor: string | null; action: string; rule: string | null; target: string | null; count: number}[]): Promise<void>;
 }
 
@@ -211,6 +221,45 @@ export function createApi(store: Store, config: Config, refusals = new RefusalLo
     send(res, 200, {board, posts, next: posts.length === limit ? posts.at(-1)!.cursor : null}, undefined, {Vary: 'Accept'});
   }
 
+  // A day as YYYY-MM-DD that is a real calendar day, or null.
+  const day = (text: string | null) => {
+    if (text === null || !/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+    const time = Date.parse(text + 'T00:00:00Z');
+    return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === text ? time : null;
+  };
+  const isoDay = (time: number) => new Date(time).toISOString().slice(0, 10);
+  // Each range is computed at most once a minute (the cache), and at most STATS.queriesPerMinute new ranges a minute
+  // in all, so a caller cannot make the database work by changing the range. A range in flight is shared.
+  const statsCache = new Map<string, {at: number; value: Promise<StatsCounts>}>();
+  let statsWindow = {start: 0, queries: 0};
+  async function stats(url: URL, res: ServerResponse) {
+    const known = new Set(['from', 'to']);
+    const today = Date.parse(isoDay(Date.now()) + 'T00:00:00Z');
+    const fromText = url.searchParams.get('from'), toText = url.searchParams.get('to');
+    const to = toText === null ? today : day(toText);
+    const from = fromText === null ? (to === null ? null : to - (STATS.defaultDays - 1) * 86400000) : day(fromText);
+    if ([...url.searchParams.keys()].some(k => !known.has(k)) || url.searchParams.getAll('from').length > 1 || url.searchParams.getAll('to').length > 1
+        || from === null || to === null || from > to) return refuse(res, 400, 'query', 'Give from and to as YYYY-MM-DD (UTC days), from not after to.');
+    if ((to - from) / 86400000 + 1 > STATS.maxDays) return refuse(res, 400, 'range', `At most ${STATS.maxDays} days.`);
+    const key = isoDay(from) + '/' + isoDay(to), now = Date.now();
+    let entry = statsCache.get(key);
+    if (!entry || now - entry.at > STATS.cacheMs) {
+      if (now - statsWindow.start > 60_000) statsWindow = {start: now, queries: 0};
+      if (statsWindow.queries >= STATS.queriesPerMinute) return refuse(res, 429, 'stats_rate', 'Too many count requests; try later.');
+      statsWindow.queries++;
+      // Only the listed fields are copied, so nothing else the store returns can reach the answer.
+      const value = store.counts(isoDay(from), isoDay(to)).then(c => ({generatedAt: new Date().toISOString(),
+        days: c.days.map(d => ({date: d.date, board: d.board, human: d.human, agent: d.agent})),
+        weeks: c.weeks.map(w => ({week: w.week, humanAccounts: w.humanAccounts, agentKeys: w.agentKeys}))}));
+      entry = {at: now, value};
+      statsCache.delete(key); statsCache.set(key, entry);
+      if (statsCache.size > STATS.cacheEntries) statsCache.delete(statsCache.keys().next().value!);
+      value.catch(() => { if (statsCache.get(key) === entry) statsCache.delete(key); });
+    }
+    const body = await entry.value;
+    send(res, 200, body, undefined, {'Cache-Control': 'public, max-age=60', 'Access-Control-Allow-Origin': '*'});
+  }
+
   const wantsMarkdown = (req: IncomingMessage) => /text\/markdown/.test(req.headers.accept ?? '');
   const markdown = (res: ServerResponse, body: string) => send(res, 200, body, 'text/markdown; charset=utf-8', {Vary: 'Accept'});
   async function sendFeed(res: ServerResponse, slug: string, posts: PostRow[]) {
@@ -274,6 +323,7 @@ export function createApi(store: Store, config: Config, refusals = new RefusalLo
       const url = new URL(req.url ?? '/', 'http://board.invalid');
       if (url.pathname === '/api/posts' && req.method === 'POST') await post(req, res);
       else if (url.pathname === '/api/posts' && (req.method === 'GET' || req.method === 'HEAD')) await list(url, req, res);
+      else if (url.pathname === '/api/stats/counts' && (req.method === 'GET' || req.method === 'HEAD')) await stats(url, res);
       else if (url.pathname === '/llms.txt' && (req.method === 'GET' || req.method === 'HEAD')) markdown(res, llmsTxt(await boardList(), config.origin));
       else if ((req.method === 'GET' || req.method === 'HEAD') && (url.pathname === '/sitemap.xml' || rootFile(url.pathname))) await rootPath(url, req, res);
       else if ((req.method === 'GET' || req.method === 'HEAD') && /^\/(assets\/[A-Za-z0-9_./-]{1,80}|[a-z0-9][a-z0-9-]{0,62})?$/.test(url.pathname)

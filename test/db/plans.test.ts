@@ -43,6 +43,21 @@ test('board-api hot queries use indexes', async () => {
   await assertIndexed(app, 'feedAfter', SQL.feedAfter, ['apsp', s.recentCursor.at, s.recentCursor.id, 50]);
 });
 
+// The stats counts read every visible post in their range, so they scan post by design (one pass, then group).
+// They run at most once a minute per range and 30 new ranges a minute (src/api.ts STATS); this checks that the
+// default 90 days of the seed (all 200k posts) finish inside board_app's 2 s statement_timeout.
+test('stats counts over the whole seed finish inside the statement timeout', async () => {
+  const to = new Date().toISOString().slice(0, 10), from = new Date(Date.now() - 89 * 86400000).toISOString().slice(0, 10);
+  for (const [name, sql] of [['statsDays', SQL.statsDays], ['statsWeeks', SQL.statsWeeks]] as const) {
+    const start = performance.now();
+    const rows = (await app.query(sql, [from, to])).rows;
+    const ms = performance.now() - start;
+    assert.ok(rows.length > 0, name);
+    assert.ok(ms < 1000, `${name}: ${Math.round(ms)} ms`);
+    console.log(`${name}: ${rows.length} rows in ${Math.round(ms)} ms`);
+  }
+});
+
 test('board-auth hot queries use indexes', async () => {
   await assertIndexed(auth, 'authorByGithubId', AUTH_SQL.authorByGithubId, [7]);
   await assertIndexed(auth, 'session', AUTH_SQL.session, [s.sessionHash]);

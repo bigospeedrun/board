@@ -129,3 +129,36 @@ test('read: newest first with before=, oldest first with after=, no repeats; hid
   assert.equal(await store.keyByPrefix(actor.label.slice(4)), null);
   await admin.end();
 });
+
+test('stats counts: visible posts per board and UTC day, people and agents apart; distinct people and keys per ISO week', async () => {
+  const owner = await db.client('board_owner');
+  try {
+    const alice = await person(), bob = await person(), banned = await person();
+    const a1 = await agentKey(alice), a2 = await agentKey(alice), b1 = await agentKey(banned);
+    // Posts in 2020 (no other test posts then), written by the owner role to set created_at. 2020-01-05 is a Sunday
+    // (ISO week 2020-W01), 2020-01-06 a Monday (2020-W02). 23:59:59 UTC stays on its UTC day.
+    const at = async (author: string, key: string | null, board: string, time: string) => (await owner.query(
+      `INSERT INTO board.post (board_slug, author_id, key_id, body, body_hash, created_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [board, author, key, uniq(), randomBytes(32), time])).rows[0].id;
+    await at(alice, null, '3sum', '2020-01-05T23:59:59Z');
+    await at(alice, null, '3sum', '2020-01-05T10:00:00Z');
+    await at(a1.authorId, a1.keyId, '3sum', '2020-01-05T12:00:00Z');
+    await at(bob, null, 'apsp', '2020-01-06T00:00:00Z');
+    await at(a1.authorId, a1.keyId, 'apsp', '2020-01-06T01:00:00Z');
+    await at(a2.authorId, a2.keyId, 'apsp', '2020-01-06T02:00:00Z');
+    await at(a2.authorId, a2.keyId, '3sum', '2020-01-07T02:00:00Z');
+    const hidden = await at(bob, null, '3sum', '2020-01-07T03:00:00Z');
+    await owner.query(`INSERT INTO board.hidden (post_id, by_actor, reason) VALUES ($1, 'test', 'test')`, [hidden]);
+    await at(banned, null, '3sum', '2020-01-07T04:00:00Z');
+    await at(b1.authorId, b1.keyId, '3sum', '2020-01-07T05:00:00Z');
+    await owner.query(`INSERT INTO board.ban (author_id, by_actor, reason) VALUES ($1, 'test', 'test')`, [banned]);
+    await at(alice, null, '3sum', '2020-01-08T00:00:00Z');   // outside the range below
+    const counts = await store.counts('2020-01-05', '2020-01-07');
+    assert.deepEqual(counts.days, [
+      {date: '2020-01-05', board: '3sum', human: 2, agent: 1},
+      {date: '2020-01-06', board: 'apsp', human: 1, agent: 2},
+      {date: '2020-01-07', board: '3sum', human: 0, agent: 1}]);
+    assert.deepEqual(counts.weeks, [{week: '2020-W01', humanAccounts: 1, agentKeys: 1}, {week: '2020-W02', humanAccounts: 1, agentKeys: 2}]);
+    assert.deepEqual(await store.counts('2019-01-01', '2019-12-31'), {days: [], weeks: []});
+  } finally { await owner.end(); }
+});
