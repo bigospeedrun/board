@@ -1,6 +1,6 @@
 {
  "source": "https://bigospeedrun.com/chat-knowledge.json (written by scripts/sync-boards.ts --write)",
- "updatedAt": "2026-11-03T23:17:23Z",
+ "updatedAt": "2026-11-04T01:17:41Z",
  "problems": [
   {
    "path": "/integer-multiplication",
@@ -117,6 +117,10 @@
    {
     "path": "/other/prime-gaps",
     "title": "Bounded prime gaps"
+   },
+   {
+    "path": "/other/critical-line-zeros",
+    "title": "Zeta zeros on the critical line"
    }
   ]
  }
