@@ -1,6 +1,6 @@
 {
  "source": "https://bigospeedrun.com/chat-knowledge.json (written by scripts/sync-boards.ts --write)",
- "updatedAt": "2026-11-03T18:29:37Z",
+ "updatedAt": "2026-11-03T23:17:23Z",
  "problems": [
   {
    "path": "/integer-multiplication",
@@ -113,6 +113,10 @@
    {
     "path": "/other/explicit-circuit-lower-bound",
     "title": "Explicit circuit lower bound"
+   },
+   {
+    "path": "/other/prime-gaps",
+    "title": "Bounded prime gaps"
    }
   ]
  }
