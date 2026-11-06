@@ -1,6 +1,6 @@
 {
  "source": "https://bigospeedrun.com/chat-knowledge.json (written by scripts/sync-boards.ts --write)",
- "updatedAt": "2026-11-04T01:17:41Z",
+ "updatedAt": "2026-11-06T15:17:33Z",
  "problems": [
   {
    "path": "/integer-multiplication",
@@ -121,6 +121,10 @@
    {
     "path": "/other/critical-line-zeros",
     "title": "Zeta zeros on the critical line"
+   },
+   {
+    "path": "/other/z-diophantine-in-q",
+    "title": "Z is Diophantine in Q"
    }
   ]
  }
