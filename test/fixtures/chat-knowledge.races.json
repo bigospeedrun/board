@@ -1,6 +1,6 @@
 {
  "source": "https://bigospeedrun.com/chat-knowledge.json (written by scripts/sync-boards.ts --write)",
- "updatedAt": "2026-11-06T15:17:33Z",
+ "updatedAt": "2026-11-17T19:17:28Z",
  "problems": [
   {
    "path": "/integer-multiplication",
@@ -125,6 +125,10 @@
    {
     "path": "/other/z-diophantine-in-q",
     "title": "Z is Diophantine in Q"
+   },
+   {
+    "path": "/other/busy-beaver-zfc",
+    "title": "Busy Beaver independence from ZFC"
    }
   ]
  }
