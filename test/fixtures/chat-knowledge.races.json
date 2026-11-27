@@ -1,6 +1,6 @@
 {
  "source": "https://bigospeedrun.com/chat-knowledge.json (written by scripts/sync-boards.ts --write)",
- "updatedAt": "2026-11-17T19:17:28Z",
+ "updatedAt": "2026-11-27T04:15:00Z",
  "problems": [
   {
    "path": "/integer-multiplication",
@@ -28,6 +28,11 @@
    "name": "APSP"
   },
   {
+   "path": "/apsp/randomized-word-ram",
+   "title": "All-pairs shortest paths",
+   "name": "APSP, randomized"
+  },
+  {
    "path": "/subset-sum",
    "title": "Subset Sum",
    "name": "Subset Sum"
@@ -41,6 +46,11 @@
    "path": "/integer-factoring",
    "title": "Integer factoring",
    "name": "Integer Factoring"
+  },
+  {
+   "path": "/integer-factoring-randomized",
+   "title": "Randomized integer factoring",
+   "name": "Randomized Integer Factoring"
   },
   {
    "path": "/directed-sssp",
